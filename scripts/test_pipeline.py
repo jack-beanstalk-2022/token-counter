@@ -1,0 +1,1548 @@
+"""Tests for the rest of the pipeline: tokenizer, classification, images, attribution.
+
+Run with ``python scripts/test_pipeline.py``. No network, no corpus dependency.
+"""
+import base64
+import contextlib
+import datetime
+import io
+import json
+import os
+import pathlib
+import re
+import sqlite3
+import struct
+import subprocess
+import sys
+import tempfile
+import zlib
+
+LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   'plugins', 'token-counter', 'skills', 'token-report', 'scripts')
+sys.path.insert(0, LIB)
+
+from tokencounter import analyze, classify, encoding, images, ledger, render, rollout, worker  # noqa: E402
+
+RESULTS = []
+
+
+def check(name, ok, detail=''):
+    RESULTS.append((name, ok, detail))
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f'\n        {detail}' if not ok else ''))
+
+
+# --------------------------------------------------------------------------- tokenizer
+
+def test_offline_tokenizer():
+    """The encoding must build with networking hard-blocked, and match stock o200k_base."""
+    code = (
+        'import socket, sys\n'
+        'class Blocked(Exception): pass\n'
+        'def deny(*a, **k): raise Blocked("network access attempted")\n'
+        'socket.socket = deny; socket.create_connection = deny\n'
+        f'sys.path.insert(0, {LIB!r})\n'
+        'from tokencounter import encoding\n'
+        'enc = encoding.load()\n'
+        'sample = "The quick brown fox\\n\\tjumps 1234 \\u4e2d\\u6587 \\U0001f600 x**2 # note"\n'
+        'print(enc.n_vocab, len(enc.encode_ordinary(sample)),'
+        ' sum(enc.encode_ordinary(sample)))\n'
+    )
+    p = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    if p.returncode != 0:
+        check('tokenizer builds offline', False, p.stderr.strip()[-400:])
+        return
+    vocab, n, checksum = p.stdout.split()
+    check('tokenizer builds offline (network blocked)', vocab == '200019',
+          f'n_vocab={vocab}')
+    try:
+        import tiktoken
+        ref = tiktoken.get_encoding('o200k_base')
+        sample = 'The quick brown fox\n\tjumps 1234 中文 \U0001f600 x**2 # note'
+        ids = ref.encode_ordinary(sample)
+        check('offline output identical to stock o200k_base',
+              int(n) == len(ids) and int(checksum) == sum(ids),
+              f'ours=({n},{checksum}) stock=({len(ids)},{sum(ids)})')
+    except Exception as exc:
+        check('offline output identical to stock o200k_base', True,
+              f'reference unavailable: {exc.__class__.__name__} (skipped)')
+
+
+def test_encoding_cached():
+    a, b = encoding.load(), encoding.load()
+    check('encoding is cached per process', a is b)
+
+
+# --------------------------------------------------------------------------- images
+
+def _png(w, h):
+    ihdr = b'IHDR' + struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0)
+    raw = (b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + ihdr
+           + struct.pack('>I', zlib.crc32(ihdr)))
+    return 'data:image/png;base64,' + base64.b64encode(raw + b'\x00' * 900).decode()
+
+
+def _jpeg(w, h, fill=0):
+    """`fill` FF bytes are inserted before SOF0: the standard allows any run of them."""
+    raw = (b'\xff\xd8'
+           + b'\xff\xe0' + struct.pack('>H', 16) + b'JFIF\x00' + b'\x00' * 9
+           + b'\xff' * fill
+           + b'\xff\xc0' + struct.pack('>H', 17) + b'\x08' + struct.pack('>HH', h, w)
+           + b'\x03' + b'\x00' * 9)
+    return 'data:image/jpeg;base64,' + base64.b64encode(raw + b'\x00' * 900).decode()
+
+
+def test_images():
+    check('PNG dimensions from prefix', images.dimensions(_png(1920, 1080)) == ('png', 1920, 1080),
+          str(images.dimensions(_png(1920, 1080))))
+    check('JPEG dimensions from prefix', images.dimensions(_jpeg(800, 600)) == ('jpeg', 800, 600),
+          str(images.dimensions(_jpeg(800, 600))))
+    # FF FF before a marker was read as marker FF with a garbage length, and the sniffer
+    # jumped past the frame header into nothing.
+    check('JPEG fill bytes before a marker are stepped over',
+          images.dimensions(_jpeg(800, 600, fill=3)) == ('jpeg', 800, 600),
+          str(images.dimensions(_jpeg(800, 600, fill=3))))
+    check('unknown format is ambiguous, not zero',
+          images.estimate('data:image/heic;base64,AAAA') == {
+              'format': None, 'width': None, 'height': None, 'lo': 0, 'hi': None})
+    e = images.estimate(_png(1024, 1024))
+    check('estimate reports a range across formula families', e['lo'] < e['hi'],
+          f"lo={e['lo']} hi={e['hi']}")
+    check('patch formula is capped', images.patch_tokens(20000, 20000) <= 1536,
+          str(images.patch_tokens(20000, 20000)))
+    check('4 KiB prefix suffices for a large payload',
+          images.dimensions(_png(64, 64)[:6000] ) is not None)
+
+
+# --------------------------------------------------------------------------- classify
+
+def test_classify():
+    segs, _ = classify.response_item(
+        {'type': 'message', 'role': 'user',
+         'content': [{'type': 'input_text', 'text': 'hello'}]})
+    check('user message classified', segs == [('user_message', 'hello')], str(segs))
+
+    segs, _ = classify.response_item(
+        {'type': 'function_call_output', 'call_id': 'c', 'output': 'raw string output'})
+    check('function_call_output accepts a bare string',
+          segs == [('tool_output', 'raw string output')], str(segs))
+
+    segs, _ = classify.response_item(
+        {'type': 'custom_tool_call_output', 'call_id': 'c',
+         'output': [{'type': 'input_text', 'text': 'a'}, {'type': 'input_text', 'text': 'b'}]})
+    check('custom_tool_call_output accepts a list',
+          segs == [('tool_output', 'a'), ('tool_output', 'b')], str(segs))
+
+    segs, imgs = classify.response_item(
+        {'type': 'custom_tool_call_output', 'call_id': 'c',
+         'output': [{'type': 'input_image', 'image_url': 'data:image/png;base64,AA'}]})
+    check('images are routed out of the text path', segs == [] and len(imgs) == 1, str(segs))
+
+    segs, _ = classify.response_item(
+        {'type': 'reasoning', 'encrypted_content': 'ZZZ',
+         'summary': [{'type': 'summary_text', 'text': 'thinking about it'}]})
+    check('reasoning splits summary from opaque blob',
+          segs == [('reasoning_summary', 'thinking about it'), ('reasoning_blob', 'ZZZ')],
+          str(segs))
+
+    segs, _ = classify.session_meta({'base_instructions': {'text': 'SYS'}})
+    check('base_instructions become the system prompt',
+          segs == [('system_prompt', 'SYS')], str(segs))
+
+    segs, _ = classify.world_state({'state': {'agents_md': {'a': 'b'}, 'cwd': '/x'}})
+    check('agents_md is split from the environment block',
+          sorted(c for c, _ in segs) == ['agents_md', 'environment'], str(segs))
+
+    check('assistant messages are output-side',
+          classify.item_role({'type': 'message', 'role': 'assistant'}) == 'output')
+    check('user messages are input-side',
+          classify.item_role({'type': 'message', 'role': 'user'}) == 'input')
+
+
+# --------------------------------------------------------------------------- worker
+
+def _rec(t, payload, ts):
+    return {'timestamp': f'2026-01-01T00:00:{ts:02d}.000Z', 'type': t, 'payload': payload}
+
+
+def _write(d, name, recs):
+    (pathlib.Path(d) / name).write_text(
+        ''.join(json.dumps(r, separators=(',', ':')) + '\n' for r in recs), encoding='utf-8')
+
+
+def test_worker_attribution():
+    d = tempfile.mkdtemp()
+    sysmsg = 'SYSTEM ' * 200
+    tool_out = 'TOOLOUTPUT ' * 500
+    recs = [
+        _rec('session_meta', {'session_id': 'S', 'id': 'S',
+                              'base_instructions': {'text': sysmsg},
+                              'cli_version': '0.155.1'}, 0),
+        _rec('turn_context', {'model': 'm1', 'effort': 'max', 'turn_id': 't1'}, 1),
+        _rec('response_item', {'type': 'message', 'role': 'user',
+                               'content': [{'type': 'input_text', 'text': 'question one'}]}, 2),
+        _rec('response_item', {'type': 'custom_tool_call', 'call_id': 'c1', 'name': 'exec',
+                               'input': 'ls'}, 3),
+        _rec('token_usage_record', {'response_id': 'r1', 'usage': {
+            'input_tokens': 900, 'cached_input_tokens': 0, 'output_tokens': 10,
+            'reasoning_output_tokens': 0, 'total_tokens': 910}}, 4),
+        _rec('response_item', {'type': 'custom_tool_call_output', 'call_id': 'c1',
+                               'output': [{'type': 'input_text', 'text': tool_out}]}, 5),
+        _rec('response_item', {'type': 'message', 'role': 'assistant',
+                               'content': [{'type': 'output_text', 'text': 'answer'}]}, 6),
+        _rec('token_usage_record', {'response_id': 'r2', 'usage': {
+            'input_tokens': 2400, 'cached_input_tokens': 896, 'output_tokens': 12,
+            'reasoning_output_tokens': 0, 'total_tokens': 2412}}, 7),
+        _rec('response_item', {'type': 'message', 'role': 'user',
+                               'content': [{'type': 'input_text', 'text': 'question two'}]}, 8),
+        _rec('token_usage_record', {'response_id': 'r3', 'usage': {
+            'input_tokens': 2500, 'cached_input_tokens': 2432, 'output_tokens': 9,
+            'reasoning_output_tokens': 0, 'total_tokens': 2509}}, 9),
+    ]
+    _write(d, 'rollout-a.jsonl', recs)
+    r = worker.process(os.path.join(d, 'rollout-a.jsonl'))
+
+    ct = r['cat_tokens']
+    check('every expected category is attributed',
+          {'system_prompt', 'user_message', 'tool_call_input',
+           'tool_output', 'assistant_message'} <= set(ct), str(sorted(ct)))
+    check('system prompt counted exactly once',
+          r['cat_items'].get('system_prompt') == 1, str(r['cat_items']))
+    check('three responses extracted', len(r['responses']) == 3, str(len(r['responses'])))
+
+    resp = r['responses']
+    check('prompt grows monotonically between responses',
+          resp[0]['recon_input'] < resp[1]['recon_input'] < resp[2]['recon_input'],
+          str([x['recon_input'] for x in resp]))
+    check('first response has no stable prefix', resp[0]['stable_prefix'] == 0,
+          str(resp[0]))
+    check('later responses carry a stable prefix',
+          resp[1]['stable_prefix'] > 0 and resp[2]['stable_prefix'] > 0,
+          str([x['stable_prefix'] for x in resp]))
+    check("a response's own output is not in its own prompt",
+          resp[1]['recon_input'] >= resp[1]['stable_prefix'],
+          str(resp[1]))
+
+    hot = {h['tool']: h for h in r['hot_items'] if h['tool']}
+    check('tool output is attributed to its call by call_id', 'exec' in hot, str(hot.keys()))
+    check('resent items are charged per resend',
+          any(h['resends'] >= 2 and h['cost'] == h['tokens'] * h['resends']
+              for h in r['hot_items']), str(r['hot_items'][:2]))
+
+    check('metrics-only path agrees on usage records',
+          len(worker.metrics_only(os.path.join(d, 'rollout-a.jsonl'))['explicit']) == 3)
+
+
+def test_resend_identity():
+    """resend_cost must equal the summed reconstructed prompts of the charged stream.
+
+    Each item contributes tokens x (prompts containing it); summed over items that is the
+    same double sum as summing recon_input over responses.  A both-stream file records every
+    response twice, which doubled resend costs for 602 of 1,952 files until this was pinned.
+    """
+    d = tempfile.mkdtemp()
+    usage = {'input_tokens': 900, 'cached_input_tokens': 0, 'output_tokens': 10,
+             'reasoning_output_tokens': 0, 'total_tokens': 910}
+    recs = [_rec('session_meta', {'session_id': 'S', 'id': 'S',
+                                  'base_instructions': {'text': 'SYS ' * 100}}, 0)]
+    for i in range(4):
+        recs.append(_rec('response_item', {'type': 'message', 'role': 'user',
+                                           'content': [{'type': 'input_text',
+                                                        'text': f'turn {i} ' * 60}]}, i))
+        recs.append(_rec('token_usage_record', {'response_id': f'r{i}', 'usage': usage}, i))
+        recs.append(_rec('event_msg', {'type': 'token_count', 'info': {
+            'last_token_usage': usage,
+            'total_token_usage': dict(usage, input_tokens=900 * (i + 1))}}, i))
+        recs.append(_rec('response_item', {'type': 'message', 'role': 'assistant',
+                                           'content': [{'type': 'output_text',
+                                                        'text': 'ok ' * 20}]}, i))
+    _write(d, 'rollout-both2.jsonl', recs)
+    r = worker.process(os.path.join(d, 'rollout-both2.jsonl'))
+    pref = 'explicit' if r['explicit'] else 'legacy'
+    want = sum(x['recon_input'] for x in r['responses'] if x['stream'] == pref)
+    check('resend cost equals summed reconstructed prompts (both-stream)',
+          r['resend_cost'] == want, f"resend_cost={r['resend_cost']} recon={want}")
+    check('a both-stream file does not double its resend counts',
+          all(h['resends'] <= 4 for h in r['hot_items']),
+          str([h['resends'] for h in r['hot_items']]))
+
+
+def test_stable_prefix_baseline():
+    """The baseline is the previous REQUEST's prompt, not the prompt plus its own output.
+
+    Round-6 counterexample: a 20-token request, a 100-token assistant reply, then a 10-token
+    input reported a 120-token stable prefix. The provider never saw a 120-token prompt.
+
+    The reply is written *before* the response's usage record, as Codex writes it.  The first
+    version of this test wrote it after, so the reply was never a trailing output run, the
+    fold this is about never happened, and the test passed with its fix reverted.  The
+    both-stream variant pins the second defect: the legacy mirror that follows each explicit
+    record moved the baseline *after* the fold, so every both-stream file carried the round-6
+    figure while this explicit-only case stayed green.
+    """
+    u = {'input_tokens': 1, 'cached_input_tokens': 0, 'output_tokens': 1,
+         'reasoning_output_tokens': 0, 'total_tokens': 2}
+
+    def msg(role, text, ts):
+        kind = 'output_text' if role == 'assistant' else 'input_text'
+        return _rec('response_item', {'type': 'message', 'role': role,
+                                      'content': [{'type': kind, 'text': text}]}, ts)
+
+    def mirror(ts, cum):
+        return _rec('event_msg', {'type': 'token_count', 'info': {
+            'last_token_usage': u, 'total_token_usage': dict(u, input_tokens=cum)}}, ts)
+
+    for both in (False, True):
+        d = tempfile.mkdtemp()
+        recs = [_rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0),
+                msg('user', 'aa ' * 200, 1), msg('assistant', 'bb ' * 800, 2),
+                _rec('token_usage_record', {'response_id': 'r1', 'usage': u}, 3)]
+        if both:
+            recs.append(mirror(3, 1))
+        recs += [msg('user', 'cc ' * 40, 4), msg('assistant', 'dd ' * 5, 5),
+                 _rec('token_usage_record', {'response_id': 'r2', 'usage': u}, 6)]
+        if both:
+            recs.append(mirror(6, 2))
+        _write(d, 'rollout-sp.jsonl', recs)
+        r = worker.process(os.path.join(d, 'rollout-sp.jsonl'))
+        first, second = [x for x in r['responses'] if x['stream'] == 'explicit'][:2]
+        tag = 'both-stream' if both else 'explicit-only'
+        check(f'stable prefix equals the previous request, not request + its output ({tag})',
+              second['stable_prefix'] == first['recon_input'],
+              f"stable={second['stable_prefix']} prev_request={first['recon_input']} "
+              f"next_prompt={second['recon_input']}")
+        check(f'the assistant reply is still part of the next prompt ({tag})',
+              second['recon_input'] > first['recon_input'] + 20,
+              f"{first['recon_input']} -> {second['recon_input']}")
+
+
+def test_compaction_segments():
+    """Identical content either side of a compaction must not look like a stable prefix."""
+    d = tempfile.mkdtemp()
+    u = {'input_tokens': 1, 'cached_input_tokens': 0, 'output_tokens': 1,
+         'reasoning_output_tokens': 0, 'total_tokens': 2}
+    msg = {'type': 'message', 'role': 'user',
+           'content': [{'type': 'input_text', 'text': 'same text ' * 50}]}
+    recs = [
+        _rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0),
+        _rec('response_item', msg, 1),
+        _rec('token_usage_record', {'response_id': 'r1', 'usage': u}, 2),
+        _rec('compacted', {'replacement_history': [msg]}, 3),
+        _rec('token_usage_record', {'response_id': 'r2', 'usage': u}, 4),
+    ]
+    _write(d, 'rollout-cp.jsonl', recs)
+    r = worker.process(os.path.join(d, 'rollout-cp.jsonl'))
+    after = r['responses'][1]
+    check('a compacted prompt reports no stable prefix',
+          after['stable_prefix'] == 0, str(after))
+
+
+def test_windowed_ledger_scope():
+    """A window must not hide the ancestors a fork child replays."""
+    d = tempfile.mkdtemp()
+
+    def snap(ts, inp, cum, day):
+        return {'timestamp': f'2026-0{day}-01T00:00:{ts:02d}.000Z', 'type': 'event_msg',
+                'payload': {'type': 'token_count', 'info': {
+                    'last_token_usage': {'input_tokens': inp, 'cached_input_tokens': 0,
+                                         'output_tokens': 1, 'reasoning_output_tokens': 0,
+                                         'total_tokens': inp + 1},
+                    'total_token_usage': {'input_tokens': cum, 'cached_input_tokens': 0,
+                                          'output_tokens': 1, 'reasoning_output_tokens': 0,
+                                          'total_tokens': cum + 1}}}}
+
+    def smeta(tid, day, parent=None):
+        pl = {'session_id': 'S', 'id': tid,
+              'timestamp': f'2026-0{day}-01T00:00:00.000Z'}
+        if parent:
+            pl['parent_thread_id'] = parent
+        return {'timestamp': f'2026-0{day}-01T00:00:00.000Z',
+                'type': 'session_meta', 'payload': pl}
+
+    os.makedirs(os.path.join(d, '2026', '01', '01'), exist_ok=True)
+    os.makedirs(os.path.join(d, '2026', '02', '01'), exist_ok=True)
+    _write(os.path.join(d, '2026', '01', '01'), 'rollout-2026-01-01T00-00-00-p.jsonl',
+           [smeta('p', 1), snap(1, 100, 100, 1), snap(2, 200, 300, 1)])
+    _write(os.path.join(d, '2026', '02', '01'), 'rollout-2026-02-01T00-00-00-c.jsonl',
+           [smeta('c', 2, parent='p'), snap(1, 100, 100, 2), snap(2, 200, 300, 2),
+            snap(3, 300, 600, 2)])
+
+    all_paths = rollout.discover(d)
+    window = set(rollout.discover(d, since='2026-02-01'))
+    data = {p: worker.metrics_only(p) for p in all_paths}
+
+    _, full = ledger.build(data, scope=window)
+    naive_data = {p: data[p] for p in window}
+    _, naive = ledger.build(naive_data)
+    check('a windowed report excludes inherited history the window cannot see',
+          full['responses'] == 1 and full['inherited'] == 2,
+          f"responses={full['responses']} inherited={full['inherited']}")
+    check('filtering before the ledger would have overcharged it',
+          naive['responses'] == 3 and naive['inherited'] == 0,
+          f"naive responses={naive['responses']}")
+
+
+def test_corrupt_record_counted():
+    """A complete but unparseable record is a lost record, and must be counted as one."""
+    d = tempfile.mkdtemp()
+    good = _rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0)
+    usage = _rec('token_usage_record', {'response_id': 'r1', 'usage': {
+        'input_tokens': 200, 'cached_input_tokens': 0, 'output_tokens': 1,
+        'reasoning_output_tokens': 0, 'total_tokens': 201}}, 2)
+    p = pathlib.Path(d) / 'rollout-corrupt.jsonl'
+    p.write_text(
+        json.dumps(good, separators=(',', ':')) + '\n'
+        + '{"type":"token_usage_record","payload":{"usage":{"input_tokens":100,\n'
+        + json.dumps(usage, separators=(',', ':')) + '\n', encoding='utf-8')
+    r = worker.metrics_only(str(p))
+    check('a corrupt usage record is counted, not silently lost',
+          r['counters'].get('unparseable_records') == 1
+          and r['counters'].get('unparseable_usage_records') == 1,
+          str(r['counters']))
+    check('surviving records are still charged', len(r['explicit']) == 1, str(r['explicit']))
+
+
+def test_extractor_version_tracks_source():
+    """The cache key must move when anything that shapes a payload moves."""
+    sys.path.insert(0, os.path.join(LIB))
+    import importlib
+    rp = importlib.import_module('report')
+    v1 = rp._extractor_version()
+    src = os.path.join(LIB, 'tokencounter', 'worker.py')
+    original = open(src, 'rb').read()
+    try:
+        open(src, 'ab').write(b'\n# cache-key probe\n')
+        v2 = rp._extractor_version()
+    finally:
+        open(src, 'wb').write(original)
+    check('the cache key is derived from the extraction source', v1 != v2, f'{v1} vs {v2}')
+    check('reverting the source restores the key', rp._extractor_version() == v1)
+
+    # The vocabulary decides the token counts, so it is part of the payload's shape.
+    d = tempfile.mkdtemp()
+    alt = os.path.join(d, 'alt.tiktoken')
+    real = encoding.vendor_path()
+    with open(real, 'rb') as fh:
+        blob = fh.read()
+    with open(alt, 'wb') as fh:
+        fh.write(blob)
+    check('the same vocabulary at a different path keeps the cache key',
+          rp._extractor_version(alt) == v1, 'identical contents should not force a rebuild')
+    alt2 = os.path.join(d, 'alt2.tiktoken')
+    with open(alt2, 'wb') as fh:
+        fh.write(blob[:-40])
+    try:
+        v3 = rp._extractor_version(alt2)
+    except Exception:
+        v3 = 0
+    check('a damaged vocabulary never reuses the cache',
+          v3 != rp._extractor_version(alt), 'same key for different vocab contents')
+
+    # The tokenizer implementation matters as much as the vocabulary: a same-version wheel
+    # swap changes counts while __version__ and __file__ stay identical.  The key is a
+    # behavioural fingerprint, so it moves when the tokenizer's output moves.
+    import tiktoken
+    real = tiktoken.Encoding.encode_ordinary
+    encoding.load.cache_clear()
+    try:
+        tiktoken.Encoding.encode_ordinary = lambda self, t: [999] * (len(t) // 7 + 1)
+        v_patched = rp._extractor_version()
+    finally:
+        tiktoken.Encoding.encode_ordinary = real
+        encoding.load.cache_clear()
+    check('a tokenizer that returns different ids changes the cache key',
+          v_patched != v1, f'{v1} vs {v_patched}')
+    check('restoring the tokenizer restores the key', rp._extractor_version() == v1)
+
+
+def _snap_line(ts, inp, cum, day):
+    return json.dumps({
+        'timestamp': f'2026-0{day}-01T00:00:{ts:02d}.000Z', 'type': 'event_msg',
+        'payload': {'type': 'token_count', 'info': {
+            'last_token_usage': {'input_tokens': inp, 'cached_input_tokens': 0,
+                                 'output_tokens': 1, 'reasoning_output_tokens': 0,
+                                 'total_tokens': inp + 1},
+            'total_token_usage': {'input_tokens': cum, 'cached_input_tokens': 0,
+                                  'output_tokens': 1, 'reasoning_output_tokens': 0,
+                                  'total_tokens': cum + 1}}}}, separators=(',', ':'))
+
+
+def _meta_line(tid, day, parent=None):
+    pl = {'session_id': 'S', 'id': tid, 'timestamp': f'2026-0{day}-01T00:00:00.000Z'}
+    if parent:
+        pl['parent_thread_id'] = parent
+    return json.dumps({'timestamp': f'2026-0{day}-01T00:00:00.000Z',
+                       'type': 'session_meta', 'payload': pl}, separators=(',', ':'))
+
+
+def _corpus_with_corrupt_ancestor(corrupt):
+    """Parent (out of window) with A, B, C; child (in window) replaying all three."""
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, '2026', '01', '01'), exist_ok=True)
+    os.makedirs(os.path.join(d, '2026', '02', '01'), exist_ok=True)
+    b = _snap_line(2, 200, 300, 1)
+    if corrupt:
+        # Object-shaped, complete, and damaged: the kind a byte prefilter cannot see.
+        b = ('{"timestamp":"2026-01-01T00:00:02.000Z","typo":"event_msg","payload":'
+             '{"typo":"t0ken_count","info":{"last_token_usage":{"input_tokens":200}}},BROKEN}')
+    (pathlib.Path(d) / '2026' / '01' / '01' / 'rollout-2026-01-01T00-00-00-p.jsonl').write_text(
+        '\n'.join([_meta_line('p', 1), _snap_line(1, 100, 100, 1), b,
+                   _snap_line(3, 300, 600, 1)]) + '\n', encoding='utf-8')
+    (pathlib.Path(d) / '2026' / '02' / '01' / 'rollout-2026-02-01T00-00-00-c.jsonl').write_text(
+        '\n'.join([_meta_line('c', 2, parent='p'), _snap_line(1, 100, 100, 2),
+                   _snap_line(2, 200, 300, 2), _snap_line(3, 300, 600, 2)]) + '\n',
+        encoding='utf-8')
+    return d
+
+
+def _run_main(argv):
+    """Drive report.main() the way the CLI does, and return (model, html)."""
+    sys.path.insert(0, LIB)
+    import importlib
+    rp = importlib.import_module('report')
+    out = tempfile.mkdtemp()
+    jpath = os.path.join(out, 'm.json')
+    hpath = os.path.join(out, 'r.html')
+    rc = rp.main(list(argv) + ['--no-cache', '--no-open', '--quiet', '--procs', '1',
+                               '--json', jpath, '--out', hpath])
+    if rc != 0:
+        return rc, None, None
+    with open(jpath, encoding='utf-8') as fh:
+        model = json.load(fh)
+    with open(hpath, encoding='utf-8') as fh:
+        return rc, model, fh.read()
+
+
+def test_damage_outside_window_reaches_the_report():
+    """Drives the real `report.main()`, not the helper underneath it.
+
+    The previous version of this test called `report.damage_outside` directly. That passed
+    even with the production call site left *below* the window filter, where its own guard is
+    unreachable -- which is precisely the bug it was named for. Reverting the call site must
+    make this fail, so the test has to go through `main`.
+    """
+    for corrupt in (False, True):
+        d = _corpus_with_corrupt_ancestor(corrupt)
+        rc, model, html = _run_main(['--sessions-root', d, '--since', '2026-02-01'])
+        check(f'report.main succeeds (corrupt={corrupt})', rc == 0, f'exit {rc}')
+        if model is None:
+            return
+        q = model['quality']
+        if corrupt:
+            check('a corrupt out-of-window file reaches the window report through main()',
+                  q.get('damage_outside_window') == 1
+                  and q.get('unparseable_records') == 1, str(dict(q)))
+            # `unparseable_usage_records` is a subset of `unparseable_records`; summing both
+            # into the headline counted one damaged line as two. This fixture's type strings
+            # are deliberately mangled, so it is not usage-recognisable and the detail
+            # counter stays 0 -- the headline must still read 1.
+            check('one damaged record counts once, not once per counter',
+                  q.get('damage_outside_window') == 1
+                  and q.get('unparseable_records') == 1
+                  and not q.get('unparseable_usage_records'), str(dict(q)))
+            check('losing the ancestor record makes the window charge the replay',
+                  model['totals']['responses'] == 3, str(model['totals']['responses']))
+            check('the damage counter is carried out of the analysis',
+                  model['quality']['damage_outside_window'] == 1 and '<html' in html,
+                  str(model['quality'].get('damage_outside_window')))
+        else:
+            check('a clean ancestor reports no damage and the replay is excluded',
+                  not q.get('damage_outside_window')
+                  and model['totals']['responses'] == 0,
+                  f"damage={q.get('damage_outside_window')} "
+                  f"responses={model['totals']['responses']}")
+            # Zero damage and damage-not-looked-for are different statements, and the
+            # counter has to distinguish them whether or not a page displays it.
+            check('the damage counter is carried even at zero',
+                  model['quality']['damage_outside_window'] == 0 and '<html' in html,
+                  str(model['quality'].get('damage_outside_window')))
+
+
+def test_object_shaped_corruption_is_visible():
+    """A complete, object-shaped line with damaged type strings must not vanish."""
+    d = tempfile.mkdtemp()
+    p = pathlib.Path(d) / 'rollout-s.jsonl'
+    p.write_text(
+        _meta_line('S', 1) + '\n'
+        '{"timestamp":"x","typo":"event_msg","payload":{"typo":"t0ken_count"},BROKEN}\n',
+        encoding='utf-8')
+    m = worker.metrics_only(str(p))
+    f = worker.process(str(p))
+    check('the ledger-only path sees object-shaped corruption',
+          m['counters'].get('unparseable_records') == 1, str(m['counters']))
+    check('both paths agree on the damage count',
+          m['counters'].get('unparseable_records')
+          == f['counters'].get('unparseable_records'),
+          f"metrics={m['counters']} full={f['counters']}")
+
+
+def test_replay_mode_is_labelled():
+    """With the exclusion off, the report must not say records were dropped."""
+    d = _corpus_with_corrupt_ancestor(corrupt=False)
+    paths = rollout.discover(d)
+    results = {p: worker.process(p) for p in paths}
+    out = {}
+    for excl in (True, False):
+        charged, counters = ledger.build(results, exclude_replay=excl)
+        model = analyze.analyze(results, charged, counters,
+                                scope={'label': 't', 'replay_excluded': excl},
+                                extra_quality={'replay_exclusion_applied': 1 if excl else 0})
+        out[excl] = (model, render.render(model))
+    mex, hex_ = out[True]
+    mch, hch = out[False]
+    check('disabling the exclusion charges the replayed history',
+          mch['totals']['responses'] > mex['totals']['responses'],
+          f"{mex['totals']['responses']} -> {mch['totals']['responses']}")
+    check('the charged mode does not claim records were dropped',
+          mch['counters'].get('inherited', 0) == 0
+          and mch['counters'].get('inherited_charged', 0) > 0,
+          str({k: v for k, v in mch['counters'].items() if 'inherit' in k}))
+    # The mode used to be printed on the page; the page is a dashboard now, so the flag
+    # rides the model and the stdout summary.  It still has to be unambiguous there: which
+    # mode produced a report conditions every count in it.
+    check('the model states which replay mode produced it',
+          mch['scope']['replay_excluded'] is False
+          and mex['scope']['replay_excluded'] is True,
+          f"charged={mch['scope']} excluded={mex['scope']}")
+    check('the mode counter is carried even at zero',
+          mch['quality']['replay_exclusion_applied'] == 0
+          and mex['quality']['replay_exclusion_applied'] == 1,
+          f"{mch['quality'].get('replay_exclusion_applied')} / "
+          f"{mex['quality'].get('replay_exclusion_applied')}")
+    check('both modes still render', '<html' in hch and '<html' in hex_)
+
+
+def test_worker_double_count():
+    """A file carrying both usage streams must charge exactly one of them."""
+    d = tempfile.mkdtemp()
+    usage = {'input_tokens': 1000, 'cached_input_tokens': 0, 'output_tokens': 10,
+             'reasoning_output_tokens': 0, 'total_tokens': 1010}
+    recs = [_rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0)]
+    for i in range(3):
+        recs.append(_rec('token_usage_record', {'response_id': f'r{i}', 'usage': usage}, i + 1))
+        recs.append(_rec('event_msg', {'type': 'token_count', 'info': {
+            'last_token_usage': usage,
+            'total_token_usage': {'input_tokens': 1000 * (i + 1), 'cached_input_tokens': 0,
+                                  'output_tokens': 10, 'reasoning_output_tokens': 0,
+                                  'total_tokens': 1000 * (i + 1) + 10}}}, i + 1))
+    _write(d, 'rollout-both.jsonl', recs)
+    paths = rollout.discover(d)
+    data = {p: worker.metrics_only(p) for p in paths}
+    _, c = ledger.build(data)
+    check('both-stream file is charged once, not summed',
+          c['responses'] == 3 and c['input'] == 3000,
+          f"responses={c['responses']} input={c['input']}")
+
+
+def test_truncated_line():
+    """A rollout read mid-write must not yield a partial record."""
+    d = tempfile.mkdtemp()
+    p = pathlib.Path(d) / 'rollout-t.jsonl'
+    good = json.dumps(_rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0))
+    p.write_text(good + '\n' + '{"type":"token_usage_record","payl', encoding='utf-8')
+    r = worker.metrics_only(str(p))
+    check('a trailing partial line is withheld',
+          r['session_id'] == 'S' and r['explicit'] == [], str(r['explicit']))
+
+
+# --------------------------------------------------------------------------- report
+
+def test_render():
+    d = tempfile.mkdtemp()
+    recs = [
+        _rec('session_meta', {'session_id': 'S', 'id': 'S', 'cwd': '/w',
+                              'base_instructions': {'text': 'SYS ' * 50}}, 0),
+        _rec('turn_context', {'model': 'm1', 'effort': 'max'}, 1),
+        _rec('response_item', {'type': 'message', 'role': 'user',
+                               'content': [{'type': 'input_text', 'text': 'hi ' * 40}]}, 2),
+        _rec('token_usage_record', {'response_id': 'r1', 'usage': {
+            'input_tokens': 500, 'cached_input_tokens': 128, 'output_tokens': 10,
+            'reasoning_output_tokens': 4, 'total_tokens': 510}}, 3),
+    ]
+    _write(d, 'rollout-r.jsonl', recs)
+    paths = rollout.discover(d)
+    data = {p: worker.process(p) for p in paths}
+    charged, counters = ledger.build(data)
+    model = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    html = render.render(model)
+    check('report renders', '<html' in html and '</html>' in html, f'{len(html)} bytes')
+
+    # Rollout content still reaches the page: a model name comes from `turn_context`
+    # and is drawn in the daily chart's legend and tooltips.
+    hostile = '</script><img src=x onerror=alert(1)> &"<'
+    model2 = dict(model)
+    model2['models'] = [dict(model['models'][0], model=hostile)]
+    model2['daily'] = [dict(d, models={hostile: d['input']}) for d in model['daily']]
+    h2 = render.render(model2)
+    check('hostile rollout content cannot close the script block',
+          '</script><img' not in h2 and h2.count('</script>') == 2,
+          f"closers={h2.count('</script>')}")
+    check('hostile rollout content is escaped in the chart legend',
+          'onerror=alert' not in h2 or '&lt;img' in h2)
+    check('report is self-contained (no external fetches)',
+          'http://' not in html and 'https://' not in html
+          and 'src="//' not in html)
+    check('report embeds the limit series it draws', '__TC__' in html)
+    check('a page with no limit snapshots says so rather than drawing an empty chart',
+          'No rate-limit snapshots in range' in html)
+    check('totals reach the page', '500' in html or '510' in html)
+
+
+# ------------------------------------------------------------------------- environment
+
+def test_environment_degrades():
+    """Everything this tool needs from the machine can be missing or broken.
+
+    None of it may take the run with it: the index is an optimisation, the vocabulary is
+    only needed for tokenization, and an empty corpus is a setup problem the user has to be
+    told how to fix, not a traceback.
+    """
+    import contextlib
+    import io
+
+    import report as cli
+    from tokencounter import index as idx
+
+    d = tempfile.mkdtemp()
+
+    bad = os.path.join(d, 'corrupt.db')
+    with open(bad, 'wb') as fh:
+        fh.write(b'this is not a database' * 200)
+    cache, why = idx.try_open(bad)
+    check('a corrupt index degrades to no index', cache is None and bool(why), str(why))
+
+    with open(os.path.join(d, 'afile'), 'w') as fh:
+        fh.write('x')
+    cache, why = idx.try_open(os.path.join(d, 'afile', 'index.db'))
+    check('an unusable index location degrades to no index',
+          cache is None and bool(why), str(why))
+
+    cache, why = idx.try_open(os.path.join(d, 'fresh.db'))
+    check('a usable index still opens', cache is not None and why is None, str(why))
+    if cache:
+        cache.close()
+
+    # An empty corpus: the message has to name where it looked and how to look elsewhere,
+    # because the usual cause is a relocated CODEX_HOME.
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc = cli.main(['--sessions-root', os.path.join(d, 'nothing-here'),
+                       '--no-open', '--quiet'])
+    msg = err.getvalue()
+    check('an empty corpus exits cleanly and says where it looked',
+          rc == 2 and 'CODEX_HOME' in msg and '--sessions-root' in msg,
+          f'rc={rc} msg={msg!r}')
+
+    # Tokenization is the only thing that needs the vocabulary, so the ledger-only path has
+    # to survive its absence -- that is the fallback when a plugin copy ships without it.
+    corpus, *_ = _rl_corpus()
+    out = os.path.join(d, 'r.html')
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = cli.main(['--sessions-root', corpus, '--metrics-only', '--no-open',
+                       '--quiet', '--no-account', '--out', out,
+                       '--vocab', os.path.join(d, 'no-such-vocab.tiktoken')])
+    check('the ledger-only path runs with no vocabulary at all',
+          rc == 0 and os.path.exists(out) and os.path.getsize(out) > 2000,
+          f'rc={rc} err={err.getvalue()!r}')
+
+    # Without --metrics-only and without a tokenizer, the run must still produce a page,
+    # and the page must say why one panel is empty: an empty pie and an uncountable pie
+    # look identical otherwise.
+    soft = os.path.join(d, 'soft.html')
+    with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+        rc = cli.main(['--sessions-root', corpus, '--no-open', '--quiet', '--no-account',
+                       '--out', soft, '--vocab', os.path.join(d, 'no-such-vocab.tiktoken')])
+    page = open(soft, encoding='utf-8').read() if os.path.exists(soft) else ''
+    check('a missing tokenizer costs one panel, not the run',
+          rc == 0 and page.count('class="tile"') == 6 and 'Not counted:' in page
+          and 'rlchart' in page,
+          f'rc={rc} tiles={page.count(chr(34).join(["class=", "tile", ""]))}')
+
+    # --doctor reports the setup instead of assuming it.
+    home = os.path.join(d, 'home')
+    os.makedirs(home, exist_ok=True)
+    keep, cached = os.environ.get('CODEX_HOME'), list(cli._OUT_DIR)
+    os.environ['CODEX_HOME'] = home
+    cli._OUT_DIR.clear()
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(['--doctor', '--sessions-root', os.path.join(d, 'nothing-here')])
+    finally:
+        cli._OUT_DIR[:] = cached
+        if keep is None:
+            os.environ.pop('CODEX_HOME', None)
+        else:
+            os.environ['CODEX_HOME'] = keep
+    text = buf.getvalue()
+    check('--doctor names the resolved paths and fails loudly on an empty corpus',
+          rc == 1 and 'sessions root' in text and 'rollout files' in text and '!' in text,
+          f'rc={rc}\n{text}')
+
+
+# --------------------------------------------------------------------------- the index, end to end
+
+def _explicit_rollout(sid, n, day='2026-09-20'):
+    """`n` explicit-stream responses of 1,000 input / 500 cached each, in session `sid`."""
+    recs = [{'timestamp': f'{day}T10:00:00.000Z', 'type': 'session_meta',
+             'payload': {'session_id': sid, 'id': sid}}]
+    for i in range(n):
+        ts = f'{day}T10:00:{i:02d}.000Z'
+        recs.append({'timestamp': ts, 'type': 'response_item',
+                     'payload': {'type': 'message', 'role': 'user',
+                                 'content': [{'type': 'input_text', 'text': f'q{i}'}]}})
+        recs.append({'timestamp': ts, 'type': 'token_usage_record',
+                     'payload': {'response_id': f'{sid}-r{i}', 'usage': {
+                         'input_tokens': 1000, 'cached_input_tokens': 500,
+                         'output_tokens': 10, 'reasoning_output_tokens': 0,
+                         'total_tokens': 1010}}})
+    return recs
+
+
+def _indexed_corpus(sessions):
+    """A dated corpus and an isolated CODEX_HOME beside it: ``(root, home, paths)``."""
+    d = tempfile.mkdtemp()
+    root = os.path.join(d, 'sessions')
+    day = os.path.join(root, '2026', '09', '20')
+    os.makedirs(day)
+    paths = []
+    for sid, n in sessions:
+        name = f'rollout-2026-09-20T10-00-00-{sid}.jsonl'
+        _write(day, name, _explicit_rollout(sid, n))
+        paths.append(os.path.join(day, name))
+    return root, os.path.join(d, 'home'), paths
+
+
+@contextlib.contextmanager
+def _codex_home(home):
+    """Point CODEX_HOME -- and so index.db -- at `home` for the duration."""
+    import report as cli
+    os.makedirs(home, exist_ok=True)
+    keep, cached = os.environ.get('CODEX_HOME'), list(cli._OUT_DIR)
+    os.environ['CODEX_HOME'] = home
+    cli._OUT_DIR.clear()
+    try:
+        yield cli
+    finally:
+        cli._OUT_DIR[:] = cached
+        if keep is None:
+            os.environ.pop('CODEX_HOME', None)
+        else:
+            os.environ['CODEX_HOME'] = keep
+
+
+def _run_indexed(root, home, *extra):
+    """report.main() with the index live under `home`: ``(rc, model, stderr)``.
+
+    Not `--quiet`: the tests below read the "N cached | M to parse" line.
+    """
+    out = tempfile.mkdtemp()
+    jpath = os.path.join(out, 'm.json')
+    err = io.StringIO()
+    with _codex_home(home) as cli, contextlib.redirect_stderr(err), \
+            contextlib.redirect_stdout(io.StringIO()):
+        rc = cli.main(['--sessions-root', root, '--no-open', '--no-account', '--procs', '1',
+                       '--json', jpath, '--out', os.path.join(out, 'r.html'), *extra])
+    model = None
+    if rc == 0:
+        with open(jpath, encoding='utf-8') as fh:
+            model = json.load(fh)
+    return rc, model, err.getvalue()
+
+
+def _cache_line(stderr):
+    m = re.search(r'(\d+) cached \| (\d+) to parse', stderr)
+    return m.groups() if m else None
+
+
+def test_include_archived_counts_archived_sessions():
+    """`--include-archived` must put an archived session into the report, not just say so.
+
+    The archived payload was added to `results` but never to `window`, so the ledger charged
+    it out of scope and the report filter dropped it: the run printed "1 archived sessions
+    included" over a report that included none.  Driven through `main`, where the two sets
+    meet.
+    """
+    root, home, paths = _indexed_corpus([('aaaa', 3), ('bbbb', 5)])
+    rc, model, _ = _run_indexed(root, home)                       # populates the index
+    check('two sessions on disk are both reported',
+          rc == 0 and model['totals']['responses'] == 8, f'rc={rc}')
+    if rc != 0:
+        return
+    os.remove(paths[1])
+    rc, model, err = _run_indexed(root, home)
+    check('a vanished file leaves a plain run, and is announced as archived',
+          rc == 0 and model['totals']['responses'] == 3 and 'archived' in err,
+          f"rc={rc} responses={model and model['totals']['responses']}")
+    rc, model, err = _run_indexed(root, home, '--include-archived')
+    check('--include-archived counts the archived session',
+          rc == 0 and model['totals']['responses'] == 8
+          and model['totals']['sessions'] == 2 and model['totals']['files'] == 2,
+          f"rc={rc} totals={model and model['totals']}")
+    rc, model, err = _run_indexed(root, home, '--include-archived', '--session', 'aaaa')
+    check('--session still narrows an archived-inclusive window',
+          rc == 0 and model['totals']['responses'] == 3 and model['totals']['sessions'] == 1,
+          f"rc={rc} totals={model and model['totals']}")
+
+
+def test_rebuild_discards_a_held_index():
+    """`--rebuild` must re-parse even when the index file cannot be deleted.
+
+    Deleting the file was the whole mechanism, and the fallback comment claimed the schema
+    check would re-parse anyway -- it clears the table only on a version change.  On Windows
+    a second run holding index.db open made the delete fail, and the run then served every
+    cached payload under a message saying it could not delete the index.
+    """
+    root, home, _ = _indexed_corpus([('aaaa', 2), ('bbbb', 2), ('cccc', 2)])
+    _run_indexed(root, home)
+    rc, _, err = _run_indexed(root, home)
+    check('a warm run reuses the index', rc == 0 and _cache_line(err) == ('3', '0'),
+          f'rc={rc} {err[-200:]!r}')
+    holder = sqlite3.connect(os.path.join(home, 'token-counter', 'index.db'))
+    try:
+        rc, _, err = _run_indexed(root, home, '--rebuild')
+    finally:
+        holder.close()
+    check('--rebuild re-parses every file while another connection holds the index',
+          rc == 0 and _cache_line(err) == ('0', '3'), f'rc={rc} {err[-300:]!r}')
+    rc, _, err = _run_indexed(root, home)
+    check('the rebuilt index is warm again', rc == 0 and _cache_line(err) == ('3', '0'),
+          f'rc={rc} {err[-200:]!r}')
+
+
+def test_zero_extractor_key_bypasses_index():
+    """`_extractor_version` returns 0 for "cannot fingerprint the extractor; never reuse".
+
+    `collect` used 0 as an ordinary key, so a row written under it was served back under it.
+    """
+    import report as cli
+    from tokencounter import index as idx
+    d = tempfile.mkdtemp()
+    _write(d, 'rollout-z.jsonl', _explicit_rollout('zzzz', 1))
+    p = os.path.join(d, 'rollout-z.jsonl')
+    cache = idx.Index(os.path.join(d, 'index.db'))
+    size, mtime = rollout.stat_key(p)
+    cache.put({'path': p, 'session_id': 'zzzz', 'thread_id': 'zzzz', 'size': size,
+               'mtime_ns': mtime, 'prefix_hash': rollout.prefix_hash(p),
+               'poisoned': True}, 0, 0.0)
+    cache.commit()
+    with contextlib.redirect_stderr(io.StringIO()):
+        results, _ = cli.collect([p], 1, 1, None, cache, True, True, 0)
+    cache.close()
+    check('a zero extractor key never reads the index',
+          not results[p].get('poisoned') and len(results[p].get('explicit') or []) == 1,
+          str(results[p])[:160])
+
+
+def test_session_prefix_must_name_one_session():
+    """`--session` takes "one session id or prefix"; a prefix matching two is refused rather
+    than resolved to whichever came out of a set first."""
+    root, home, _ = _indexed_corpus([('abc1', 1), ('abc2', 1)])
+    rc, model, err = _run_indexed(root, home, '--no-cache', '--session', 'abc')
+    check('a prefix matching two sessions is refused, naming them',
+          rc == 3 and 'abc1' in err and 'abc2' in err, f'rc={rc} {err[-200:]!r}')
+    rc, model, err = _run_indexed(root, home, '--no-cache', '--session', 'abc2')
+    check('a prefix matching one session is accepted and focused',
+          rc == 0 and model['totals']['sessions'] == 1 and model['deep_dive'] == ['abc2'],
+          f"rc={rc} {model and (model['totals']['sessions'], model['deep_dive'])}")
+
+
+# --------------------------------------------------------------------------- failure modes
+
+def test_failure_modes():
+    d = tempfile.mkdtemp()
+
+    (pathlib.Path(d) / 'rollout-empty.jsonl').write_text('', encoding='utf-8')
+    r = worker.process(os.path.join(d, 'rollout-empty.jsonl'))
+    check('empty rollout yields no usage, no crash',
+          r['explicit'] == [] and r['legacy'] == []
+          and r['counters'].get('no_usage_data') == 1, str(r['counters']))
+
+    (pathlib.Path(d) / 'rollout-junk.jsonl').write_text(
+        'not json at all\n[]\nnull\n{"type":"x"}\n{"type":"session_meta","payload":3}\n',
+        encoding='utf-8')
+    r = worker.process(os.path.join(d, 'rollout-junk.jsonl'))
+    check('malformed lines are skipped, not fatal', r['session_id'] is None)
+
+    p = pathlib.Path(d) / 'rollout-noturn.jsonl'
+    p.write_text(''.join(json.dumps(x) + '\n' for x in [
+        _rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0),
+        _rec('token_usage_record', {'response_id': 'r', 'usage': {
+            'input_tokens': 10, 'cached_input_tokens': 0, 'output_tokens': 1,
+            'reasoning_output_tokens': 0, 'total_tokens': 11}}, 1)]), encoding='utf-8')
+    data = {str(p): worker.metrics_only(str(p))}
+    charged, counters = ledger.build(data)
+    m = analyze.analyze(data, charged, counters)
+    check('a session with no turn_context buckets as unknown, not as a crash',
+          m['models'] and m['models'][0]['model'] == 'unknown', str(m['models']))
+
+    check('a missing rollout is an error, not an exception',
+          bool(worker.process(os.path.join(d, 'rollout-nope.jsonl'))['error']))
+
+    bad = pathlib.Path(d) / 'empty.tiktoken'
+    bad.write_bytes(b'')
+    try:
+        encoding.load(str(bad))
+        check('a truncated vocab is rejected', False, 'no exception raised')
+    except ValueError as exc:
+        check('a truncated vocab is rejected', 'truncated' in str(exc) or 'ranks' in str(exc),
+              str(exc)[:120])
+    except Exception as exc:
+        check('a truncated vocab is rejected', False,
+              f'{exc.__class__.__name__}: {exc}')
+
+
+def test_local_day_bucketing():
+    """Record timestamps are UTC; the directory layout and --since filter use local dates."""
+    import datetime
+    off = datetime.datetime.now().astimezone().utcoffset()
+    day = analyze._day('2026-09-20T03:15:00.000Z')
+    expect = (datetime.datetime(2026, 9, 20, 3, 15,
+                                tzinfo=datetime.timezone.utc)
+              .astimezone().date().isoformat())
+    check('UTC timestamps bucket into local days', day == expect,
+          f'got {day}, expected {expect} (offset {off})')
+    check('a bad timestamp falls back rather than inventing a day',
+          analyze._day('garbage', 'fallback') == 'fallback')
+
+
+
+class _USEastern(datetime.tzinfo):
+    """UTC-5 with the 2026 US clock changes, so the test does not depend on the machine."""
+    _ON, _OFF = datetime.datetime(2026, 3, 8, 2), datetime.datetime(2026, 11, 1, 2)
+
+    def utcoffset(self, dt):
+        return datetime.timedelta(hours=-5) + self.dst(dt)
+
+    def dst(self, dt):
+        if dt is None:
+            return datetime.timedelta(0)
+        naive = dt.replace(tzinfo=None)
+        return datetime.timedelta(hours=1 if self._ON <= naive < self._OFF else 0)
+
+    def tzname(self, dt):
+        return 'TEST'
+
+
+def test_day_span_across_clock_changes():
+    """A daily bar spans local midnight to local midnight: 23 or 25 hours twice a year.
+
+    The first version localised the start and added a day to *that*.  On the fixed offset
+    `astimezone()` attaches, a day is +86,400 s, so the bar ended at 01:00 on the day the
+    clock sprang forward and at 23:00 on the day it fell back -- overlapping or gapping its
+    neighbour while the docstring said the opposite.
+    """
+    tz = _USEastern()
+    for day, hours in (('2026-03-07', 24), ('2026-03-08', 23),
+                       ('2026-11-01', 25), ('2026-11-02', 24)):
+        a, b = analyze._day_span(day, tz)
+        check(f'{day} spans {hours}h', a is not None and round((b - a) / 3600) == hours,
+              f'{(b - a) / 3600 if a is not None else None}h')
+    _, b = analyze._day_span('2026-03-08', tz)
+    c, _ = analyze._day_span('2026-03-09', tz)
+    check('consecutive days meet exactly across the clock change', b == c, f'{b} vs {c}')
+    check('the machine zone is still the default',
+          analyze._day_span('2026-09-20')[0]
+          == datetime.datetime(2026, 9, 20).astimezone().timestamp())
+
+
+def test_daily_model_split():
+    """The daily chart stacks by model, so each day's split must add up to that day."""
+    d = tempfile.mkdtemp()
+
+    def turn(ts, model, rid, inp):
+        return [
+            {'timestamp': ts, 'type': 'turn_context',
+             'payload': {'model': model, 'effort': 'max'}},
+            {'timestamp': ts, 'type': 'token_usage_record',
+             'payload': {'response_id': rid, 'usage': {
+                 'input_tokens': inp, 'cached_input_tokens': 0, 'output_tokens': 10,
+                 'reasoning_output_tokens': 0, 'total_tokens': inp + 10}}},
+        ]
+
+    recs = [_rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0)]
+    recs += turn('2026-01-01T12:00:00.000Z', 'm1', 'r1', 500)
+    recs += turn('2026-01-01T12:05:00.000Z', 'm2', 'r2', 300)
+    recs += turn('2026-01-02T12:00:00.000Z', 'm2', 'r3', 700)
+    _write(d, 'rollout-dm.jsonl', recs)
+
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    m = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    daily = m['daily']
+
+    check('the daily split accounts for every recorded token',
+          all(sum((x.get('models') or {}).values()) == x['input'] for x in daily),
+          str([(x['date'], x['input'], x.get('models')) for x in daily]))
+    check('a day is split by the model that was charged',
+          len(daily) == 2 and (daily[0].get('models') or {}) == {'m1': 500, 'm2': 300}
+          and (daily[1].get('models') or {}) == {'m2': 700},
+          str([(x['date'], x.get('models')) for x in daily]))
+
+    # The chart legend must name them, or the stack is unreadable -- and a cap that folded
+    # a real model into `other` would show up here rather than silently.
+    html = render.render(m)
+    chart = html[html.index('id="dailychart"'):]
+    chart = chart[:chart.index('id="catpie"')]
+    check('the daily chart names the models it stacks',
+          'm1' in chart and 'm2' in chart and 'other' not in chart,
+          chart[-400:])
+
+
+# --------------------------------------------------------------- account and rate limits
+
+def _jwt(claims):
+    """A syntactically valid JWT whose payload is `claims`.  The signature is never read."""
+    def seg(o):
+        return base64.urlsafe_b64encode(json.dumps(o).encode()).rstrip(b'=').decode()
+    return f"{seg({'alg': 'RS256'})}.{seg(claims)}.{'s' * 40}"
+
+
+NS = 'https://api.openai.com/auth'
+SECRETS = {'access_token': 'ACCESS-TOKEN-SHOULD-NEVER-APPEAR',
+           'refresh_token': 'REFRESH-TOKEN-SHOULD-NEVER-APPEAR'}
+
+
+def _auth_file(home, claims):
+    """Write an auth.json beside a sessions root, as Codex lays it out."""
+    os.makedirs(os.path.join(home, 'sessions'), exist_ok=True)
+    doc = {'auth_mode': 'chatgpt', 'last_refresh': '2026-09-20T00:00:00Z',
+           'tokens': dict(SECRETS, id_token=_jwt(claims), account_id='acct-fallback')}
+    with open(os.path.join(home, 'auth.json'), 'w', encoding='utf-8') as fh:
+        json.dump(doc, fh)
+    return os.path.join(home, 'sessions')
+
+
+def test_account_claims():
+    from tokencounter import account
+
+    # Nested namespace object -- the shape the live tokens on this machine carry.
+    root = _auth_file(tempfile.mkdtemp(), {
+        'email': 'a@example.com', 'name': 'A Person',
+        NS: {'chatgpt_account_id': 'acct-nested', 'chatgpt_plan_type': 'pro'}})
+    a = account.read(root)
+    check('nested namespaced claims are read',
+          a['email'] == 'a@example.com' and a['plan'] == 'pro'
+          and a['account_id'] == 'acct-nested', str(a))
+
+    # Flattened "<namespace>/<claim>" -- the conventional JWT spelling.
+    root2 = _auth_file(tempfile.mkdtemp(), {
+        'email': 'b@example.com',
+        f'{NS}/chatgpt_account_id': 'acct-flat', f'{NS}/chatgpt_plan_type': 'plus'})
+    b = account.read(root2)
+    check('flattened namespaced claims are read',
+          b['plan'] == 'plus' and b['account_id'] == 'acct-flat', str(b))
+
+    # A token carrying neither shape still identifies the account, via tokens.account_id.
+    root3 = _auth_file(tempfile.mkdtemp(), {'email': 'c@example.com'})
+    c = account.read(root3)
+    check('a token without namespaced claims still identifies the account',
+          c['available'] and c['account_id'] == 'acct-fallback' and c['plan'] is None,
+          str(c))
+
+    # The whole point of the allow-list: no bearer material can leave this module.
+    check('no access or refresh token reaches the account record',
+          not any(v in json.dumps([a, b, c]) for v in SECRETS.values()))
+
+    check('--no-account reads nothing',
+          account.read(root, enabled=False)['available'] is False)
+    check('a missing auth.json degrades, not raises',
+          account.read(os.path.join(tempfile.mkdtemp(), 'sessions'))['available'] is False)
+
+    bad = tempfile.mkdtemp()
+    os.makedirs(os.path.join(bad, 'sessions'), exist_ok=True)
+    with open(os.path.join(bad, 'auth.json'), 'w', encoding='utf-8') as fh:
+        fh.write('{not json')
+    r = account.read(os.path.join(bad, 'sessions'))
+    check('a corrupt auth.json degrades with a reason',
+          r['available'] is False and 'JSON' in (r['reason'] or ''), str(r))
+
+    # --sessions-root must not reach into the real ~/.codex: a report over a copied corpus
+    # would otherwise be stamped with the live account's email address.
+    lonely = os.path.join(tempfile.mkdtemp(), 'elsewhere')
+    os.makedirs(lonely, exist_ok=True)
+    check('an overridden sessions root looks for auth.json beside it',
+          account.auth_path(lonely) == os.path.join(os.path.dirname(lonely), 'auth.json'))
+
+
+def _rl(pct, resets_at, window=10080, slot='primary', plan='pro'):
+    other = 'secondary' if slot == 'primary' else 'primary'
+    return {'limit_id': 'codex', 'plan_type': plan, 'rate_limit_reached_type': None,
+            slot: {'used_percent': pct, 'window_minutes': window, 'resets_at': resets_at},
+            other: None}
+
+
+def _tc(ts_epoch, pct, resets_at, cum, last, **kw):
+    """A `token_count` event carrying both a usage snapshot and a rate-limit snapshot."""
+    iso = (datetime.datetime.fromtimestamp(ts_epoch, datetime.timezone.utc)
+           .isoformat().replace('+00:00', 'Z'))
+    usage = {'input_tokens': last, 'cached_input_tokens': 0, 'output_tokens': 10,
+             'reasoning_output_tokens': 0, 'total_tokens': last + 10}
+    total = {'input_tokens': cum, 'cached_input_tokens': 0, 'output_tokens': 10,
+             'reasoning_output_tokens': 0, 'total_tokens': cum + 10}
+    return {'timestamp': iso, 'type': 'event_msg',
+            'payload': {'type': 'token_count',
+                        'info': {'last_token_usage': usage, 'total_token_usage': total},
+                        'rate_limits': _rl(pct, resets_at, **kw)}}
+
+
+WEEK = 7 * 86400
+
+
+def _rl_corpus(slot='primary', window=10080):
+    """One consumed window, an early reset into a second, and an idle sliding thread."""
+    d = tempfile.mkdtemp()
+    t0 = 1789000000
+    a_reset = t0 + WEEK
+    recs = [_rec('session_meta', {'session_id': 'S', 'id': 'S'}, 0)]
+    cum = 0
+    for i, pct in enumerate((0.0, 20.0, 55.0, 90.0)):
+        cum += 1000
+        recs.append(_tc(t0 + i * 3600, pct, a_reset, cum, 1000, slot=slot, window=window))
+    # The reset: a new window reported at 0%, resetting seven days from *that* instant --
+    # sooner than the window it replaces would have expired.
+    t1 = t0 + 4 * 3600
+    b_reset = t1 + WEEK
+    for i, pct in enumerate((0.0, 12.0)):
+        cum += 1000
+        recs.append(_tc(t1 + i * 3600, pct, b_reset, cum, 1000, slot=slot, window=window))
+    _write(d, 'rollout-a.jsonl', recs)
+
+    # The server does not always stop reporting a window when it replaces it: a session
+    # served the previous week's window after the new one opened repeats its last reading.
+    _write(d, 'rollout-late.jsonl',
+           [_rec('session_meta', {'session_id': 'L', 'id': 'L'}, 0),
+            _tc(t1 + 2 * 3600, 90.0, a_reset, 0, 0, slot=slot, window=window)])
+
+    # An idle thread: 0% throughout, re-quoting its reset as now+7d on every call.
+    t2 = t1 + 3 * 3600
+    idle = [_rec('session_meta', {'session_id': 'T', 'id': 'T'}, 0)]
+    for i in range(5):
+        idle.append(_tc(t2 + i * 60, 0.0, t2 + i * 60 + WEEK, 0, 0, slot=slot, window=window))
+    _write(d, 'rollout-b.jsonl', idle)
+    return d, t0, t1, a_reset, b_reset
+
+
+def test_rate_limit_windows():
+    d, t0, t1, a_reset, b_reset = _rl_corpus()
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    rl = analyze.analyze(data, charged, counters, scope={'label': 'test'})['rate_limits']
+
+    check('rate-limit snapshots are extracted',
+          rl['available'] and rl['weekly'], str(rl.get('reason')))
+    check('one sliding idle window does not become five',
+          rl['windows_total'] == 2 and rl['idle_windows'] == 1,
+          f"windows={rl['windows_total']} idle={rl['idle_windows']} quotes={rl['quotes']}")
+
+    w0, w1 = rl['windows']
+    check('the reset boundary is where the reported percentage drops',
+          abs(w1['reset_at'] - t1) < 90, f"boundary={w1['reset_at']} expected~{t1}")
+    check('an early reset is not forced onto a seven-day grid',
+          w1['resets_at'] == b_reset and b_reset - a_reset < WEEK,
+          f"{w1['resets_at']} vs {b_reset}")
+    check('peak reported percentage is carried per window',
+          w0['peak_pct'] == 90.0 and w1['peak_pct'] == 12.0)
+
+    # Tokens are measured locally and must split at the boundary, not pool into one window.
+    check('cumulative tokens are attributed to the window they were spent in',
+          w0['tokens']['input'] == 4000 and w1['tokens']['input'] == 2000,
+          f"{w0['tokens']['input']} / {w1['tokens']['input']}")
+    check('the cumulative curve restarts at each reset',
+          bool(w1['cum_points']) and w1['cum_points'][0][1] <= 2000
+          and w0['cum_points'][-1][1] == 4000,
+          f"{w0['cum_points'][-1]} then {w1['cum_points'][0]}")
+    check('a window that was never consumed is not drawn',
+          all(w['peak_pct'] for w in rl['windows']))
+
+    # A reading for a window that arrives after its successor opened is not drawn: two
+    # limit curves live at the same moment is a chart of a contradiction.
+    check('a window reported after its successor opened is not drawn past the boundary',
+          rl['late_readings'] == 1 and w0['late_points'] == 1
+          and all(p[0] <= w1['reset_at'] for p in w0['pct_points']),
+          f"late={rl['late_readings']} w0={w0['late_points']} "
+          f"last={w0['pct_points'][-1] if w0['pct_points'] else None} "
+          f"boundary={w1['reset_at']}")
+    check('the clipped reading still counts toward the reported peak',
+          w0['peak_pct'] == 90.0 and w0['late_peak'] == 90.0,
+          f"peak={w0['peak_pct']} late_peak={w0['late_peak']}")
+
+    # The weekly window sat in `secondary` behind a 5-hour `primary` in older CLI builds.
+    d2, *_ = _rl_corpus(slot='secondary')
+    data2 = {p: worker.process(p) for p in rollout.discover(d2)}
+    ch2, ct2 = ledger.build(data2)
+    rl2 = analyze.analyze(data2, ch2, ct2)['rate_limits']
+    check('the weekly window is found by length, not by slot name',
+          rl2['available'] and rl2['weekly'] and rl2['windows_total'] == 2,
+          f"available={rl2['available']} total={rl2.get('windows_total')}")
+
+    # A `token_count` with `info: null` carries no usage but still carries a window.
+    d3 = tempfile.mkdtemp()
+    rec = _tc(t0, 33.0, a_reset, 0, 0)
+    rec['payload']['info'] = None
+    _write(d3, 'rollout-c.jsonl',
+           [_rec('session_meta', {'session_id': 'U', 'id': 'U'}, 0), rec])
+    r3 = worker.process(os.path.join(d3, 'rollout-c.jsonl'))
+    check('a usage-less token_count still yields its rate-limit window',
+          len(r3['rate_limits']) == 1 and r3['rate_limits'][0]['max_pct'] == 33.0,
+          str(r3['rate_limits']))
+
+
+def test_cumulative_curve_is_monotonic():
+    """The cumulative curve must only ever climb, whatever order the files are read in.
+
+    Responses reach the analyzer one file at a time, in path order, while sessions overlap in
+    time: a file read second routinely holds responses older than the one read first.  A
+    running total accumulated in that order and then plotted against time steps backwards.
+    The corpus below makes the two orders opposites -- the file that sorts first holds the
+    *later* half of the week -- so any regression shows up as a curve that falls.
+    """
+    d = tempfile.mkdtemp()
+    t0 = 1789000000
+    reset = t0 + WEEK
+
+    def thread(name, sid, start, per, pcts):
+        recs = [_rec('session_meta', {'session_id': sid, 'id': sid}, 0)]
+        cum = 0
+        for i, pct in enumerate(pcts):
+            cum += per
+            recs.append(_tc(start + i * 1800, pct, reset, cum, per))
+        _write(d, name, recs)
+
+    # Sorted by path, 'rollout-a-late' is read before 'rollout-z-early'; sorted by time it
+    # comes second.  Unequal per-response sizes keep the two halves distinguishable.
+    thread('rollout-z-early.jsonl', 'E', t0, 1000, (0.0, 5.0, 10.0, 15.0))
+    thread('rollout-a-late.jsonl', 'L', t0 + 4 * 1800, 5000, (20.0, 25.0, 30.0, 35.0))
+
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    rl = analyze.analyze(data, charged, counters, scope={'label': 'test'})['rate_limits']
+    pts = rl['windows'][-1]['cum_points'] if rl['windows'] else []
+
+    falls = [(a, b) for a, b in zip(pts, pts[1:])
+             if b[1] < a[1] or b[2] < a[2] or b[3] < a[3]]
+    check('the cumulative curve never steps backwards',
+          bool(pts) and not falls,
+          f"{len(falls)} drop(s), first {falls[0] if falls else None} in {pts}")
+    check('cumulative points are drawn in time order',
+          [p[0] for p in pts] == sorted(p[0] for p in pts), str([p[0] for p in pts]))
+    # The curve must end on the true total, not merely climb to some arbitrary value.
+    check('the curve ends at the total spent in the window',
+          bool(pts) and pts[-1][1] == 4 * 1000 + 4 * 5000,
+          f"end={pts[-1][1] if pts else None} expected={4 * 1000 + 4 * 5000}")
+
+
+def test_account_and_limits_render():
+    from tokencounter import account
+    d, t0, t1, a_reset, b_reset = _rl_corpus()
+    _auth_file(d, {'email': 'who@example.com', NS: {'chatgpt_plan_type': 'pro'}})
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    acct = account.read(os.path.join(d, 'sessions'))
+    model = analyze.analyze(data, charged, counters, scope={'label': 'test'}, account=acct)
+    html = render.render(model)
+
+    # The page is a dashboard now: five headline numbers and three charts.  The account
+    # is reported through the model and the stdout summary instead, so that is where it is
+    # asserted -- the page-level guarantee that survives is the one about secrets.
+    check('the account is identified in the model',
+          model['account']['available'] and model['account']['email'] == 'who@example.com',
+          str(model['account']))
+    check('the reset time reaches the model',
+          bool(model['rate_limits']['current']['resets_at_iso']),
+          str(model['rate_limits'].get('current')))
+    check('no bearer material reaches the HTML',
+          not any(v in html for v in SECRETS.values()))
+    check('the limit series are embedded for the chart',
+          '"cum_points"' in html and '"pct_points"' in html)
+    check('the weekly limit is a reported percentage, never a token conversion',
+          'Weekly limit used' in html and '%' in html
+          and 'tokens per percent' not in html.lower())
+
+    # Without an account the page must still render, and must not imply one.
+    bare = analyze.analyze(data, charged, counters, scope={'label': 'test'},
+                           account=account.blank('disabled with --no-account'))
+    h2 = render.render(bare)
+    check('a report with no account renders and names none',
+          '<html' in h2 and 'who@example.com' not in h2
+          and bare['account']['reason'] == 'disabled with --no-account',
+          str(bare['account']))
+
+
+# ------------------------------------------------------------------ one shared time axis
+
+def _at(t, kind, payload):
+    """A record stamped at an absolute instant, not at second `n` of one fixed day."""
+    iso = (datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+           .isoformat().replace('+00:00', 'Z'))
+    return {'timestamp': iso, 'type': kind, 'payload': payload}
+
+
+def axis_model():
+    """A corpus with limit windows, several days of usage, and tokenized content.
+
+    Also the fixture `scripts/test_page.js` renders, so the page's own JavaScript is
+    exercised against the same data these assertions are written against.
+    """
+    d, t0, _t1, _a, _b = _rl_corpus()
+    recs = [_at(t0, 'session_meta', {'session_id': 'C', 'id': 'C', 'cwd': '/w',
+                                     'base_instructions': {'text': 'SYS ' * 60}}),
+            _at(t0, 'turn_context', {'model': 'm1', 'effort': 'max'})]
+    for i in range(3):                         # one turn a day, three days running
+        ts = t0 + i * 86400
+        recs.append(_at(ts, 'response_item', {'type': 'message', 'role': 'user',
+                    'content': [{'type': 'input_text', 'text': f'ask {i} ' * 60}]}))
+        recs.append(_at(ts + 60, 'token_usage_record', {'response_id': f'r{i}', 'usage': {
+            'input_tokens': 5000 + i, 'cached_input_tokens': 1000, 'output_tokens': 20,
+            'reasoning_output_tokens': 5, 'total_tokens': 5020 + i}}))
+    _write(d, 'rollout-content.jsonl', recs)
+
+    # A second session, days later and with content of its own: with only one file, every
+    # tokenized byte in the corpus would share a single bucket, and a chart that never
+    # recomposed would pass a test written against it.
+    t2 = t0 + 5 * 86400
+    later = [_at(t2, 'session_meta', {'session_id': 'E', 'id': 'E', 'cwd': '/w',
+                                      'base_instructions': {'text': 'OTHER SYS ' * 40}}),
+             _at(t2, 'turn_context', {'model': 'm2', 'effort': 'low'}),
+             _at(t2 + 30, 'response_item', {'type': 'message', 'role': 'user',
+                 'content': [{'type': 'input_text', 'text': 'later question ' * 50}]}),
+             _at(t2 + 60, 'token_usage_record', {'response_id': 'r9', 'usage': {
+                 'input_tokens': 7000, 'cached_input_tokens': 2000, 'output_tokens': 30,
+                 'reasoning_output_tokens': 7, 'total_tokens': 7030}})]
+    _write(d, 'rollout-later.jsonl', later)
+
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    return analyze.analyze(data, charged, counters, scope={'label': 'test'})
+
+
+def page_fixture():
+    return render.render(axis_model())
+
+
+def test_shared_time_axis():
+    """The three charts are read against each other, so they must share one axis.
+
+    A moment has to land on the same x in the limit chart and in the daily chart, and the
+    composition pie has to be recomposable over the same range.  None of that holds unless
+    the model carries a real span for every bucket it publishes, and the page draws both
+    charts over one domain on one geometry.
+    """
+    import re
+    model = axis_model()
+    daily = model['daily']
+    check('every daily bucket carries its own local-day span',
+          len(daily) >= 3 and all(x['start'] is not None
+                                  and 23 * 3600 <= x['end'] - x['start'] <= 25 * 3600
+                                  for x in daily),
+          str([(x['date'], x['start'], x['end']) for x in daily]))
+    check('the daily buckets run in order, without overlapping',
+          all(a['end'] <= b['start'] for a, b in zip(daily, daily[1:])),
+          str([(x['date'], x['start'], x['end']) for x in daily]))
+
+    # The pie is filtered by time, so the timeline has to account for exactly the tokens the
+    # corpus-wide figure does: a bucket lost here is content that disappears from the chart
+    # at full zoom, with nothing to show that it did.
+    series = model['cat_series']
+    rolled = {}
+    for t, cats in series:
+        for k, v in cats.items():
+            rolled[k] = rolled.get(k, 0) + v
+    corpus = {c['category']: c['tokens'] for c in model['categories'] if c['tokens']}
+    check('the content timeline accounts for exactly the corpus categories',
+          rolled == corpus and sum(rolled.values()) > 0,
+          f'{sorted(rolled.items())} vs {sorted(corpus.items())}')
+    bucket = model['cat_bucket_s']
+    check('content buckets are aligned to the bucket length the model publishes',
+          bucket > 0 and all(t % bucket == 0 for t, _ in series),
+          str([t for t, _ in series][:5]))
+
+    dom = render._domain(model)
+    pts = [p[0] for w in model['rate_limits']['windows'] for p in w['cum_points']]
+    check('one domain covers every series the page can draw',
+          bool(dom) and all(dom[0] <= t <= dom[1] for t in pts)
+          and all(dom[0] <= x['start'] and x['end'] <= dom[1] for x in daily)
+          and all(dom[0] <= t and t + bucket <= dom[1] for t, _ in series),
+          f'domain={dom} points={len(pts)}')
+
+    page = render.render(model)
+    check('the page carries the one domain and the one geometry both charts read',
+          f'"domain":[{dom[0]},{dom[1]}]' in page
+          and f'"w":{render.CHART_W},"l":{render.CHART_L},"r":{render.CHART_R}' in page,
+          page[page.find('"geo"'):page.find('"geo"') + 90])
+
+    vb = re.search(r'<svg viewBox="0 0 (\d+) (\d+)" data-h', page)
+    clip = re.search(r'<rect class="clip" x="(\d+)" y="0" width="(\d+)"', page)
+    check('the daily chart is drawn on the geometry the limit chart is given',
+          bool(vb) and bool(clip) and int(vb.group(1)) == render.CHART_W
+          and int(clip.group(1)) == render.CHART_L
+          and int(clip.group(2)) == render.CHART_W - render.CHART_L - render.CHART_R,
+          f'{vb and vb.groups()} {clip and clip.groups()}')
+
+    # The bars are placed by the domain, not by their position in the list.  This is the
+    # cross-reference itself: a day must start where the limit chart puts that instant.
+    bar = re.search(r'<g class="bar" data-a="(\d+)" data-b="(\d+)" '
+                    r'transform="translate\(([\d.]+),0\) scale\(([\d.]+),1\)"', page)
+    plot = render.CHART_W - render.CHART_L - render.CHART_R
+    ok = False
+    if bar:
+        a, b = int(bar.group(1)), int(bar.group(2))
+        x, sx = float(bar.group(3)), float(bar.group(4))
+        want_x = render.CHART_L + (a - dom[0]) / (dom[1] - dom[0]) * plot
+        want_sx = (b - a) / (dom[1] - dom[0]) * plot
+        ok = abs(x - want_x) < 0.05 and abs(sx - want_sx) < 0.05
+    check('a day bar is placed by the shared domain, in unit x',
+          ok, bar.group(0) if bar else 'no bar drawn')
+
+    check('all three charts are on the page, with no toolbar above them',
+          'id="tcbar"' not in page and 'id="catpie"' in page
+          and '"cats"' in page and 'id="dailychart"' in page and 'id="rlchart"' in page)
+
+    # A report with no rate limits has only the daily axis, and must still be drawable.
+    bare = dict(model, rate_limits={'available': False, 'reason': 'none recorded'})
+    dom2 = render._domain(bare)
+    h2 = render.render(bare)
+    check('the axis survives a report with no limit snapshots',
+          bool(dom2) and dom2[0] <= daily[0]['start'] and 'id="dailychart"' in h2
+          and 'No rate-limit snapshots' in h2, str(dom2))
+
+
+def main():
+    test_offline_tokenizer()
+    test_encoding_cached()
+    test_images()
+    test_classify()
+    test_worker_attribution()
+    test_resend_identity()
+    test_stable_prefix_baseline()
+    test_compaction_segments()
+    test_windowed_ledger_scope()
+    test_corrupt_record_counted()
+    test_extractor_version_tracks_source()
+    test_include_archived_counts_archived_sessions()
+    test_rebuild_discards_a_held_index()
+    test_zero_extractor_key_bypasses_index()
+    test_session_prefix_must_name_one_session()
+    test_damage_outside_window_reaches_the_report()
+    test_object_shaped_corruption_is_visible()
+    test_replay_mode_is_labelled()
+    test_worker_double_count()
+    test_truncated_line()
+    test_failure_modes()
+    test_local_day_bucketing()
+    test_day_span_across_clock_changes()
+    test_daily_model_split()
+    test_environment_degrades()
+    test_account_claims()
+    test_rate_limit_windows()
+    test_cumulative_curve_is_monotonic()
+    test_account_and_limits_render()
+    test_shared_time_axis()
+    test_render()
+    bad = sum(1 for _, ok, _ in RESULTS if not ok)
+    print(f'\n{len(RESULTS) - bad}/{len(RESULTS)} passed')
+    return 1 if bad else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

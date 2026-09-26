@@ -1,0 +1,20 @@
+{
+  "name": "jack-beanstalk-2022",
+  "interface": {
+    "displayName": "jack-beanstalk-2022"
+  },
+  "plugins": [
+    {
+      "name": "token-counter",
+      "source": {
+        "source": "local",
+        "path": "./plugins/token-counter"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

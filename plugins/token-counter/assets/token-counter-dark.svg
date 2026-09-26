@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Token Counter">
+  <rect x="4" y="4" width="56" height="56" rx="13" fill="#0F1115" stroke="#272B33" stroke-width="2"/>
+  <rect x="14" y="34" width="8" height="16" rx="2" fill="#2B4270"/>
+  <rect x="28" y="24" width="8" height="26" rx="2" fill="#3B5A93"/>
+  <rect x="42" y="14" width="8" height="36" rx="2" fill="#60A5FA"/>
+  <rect x="14" y="43" width="8" height="7" rx="2" fill="#93C5FD"/>
+  <rect x="28" y="41" width="8" height="9" rx="2" fill="#93C5FD"/>
+  <rect x="42" y="38" width="8" height="12" rx="2" fill="#DBEAFE"/>
+</svg>
