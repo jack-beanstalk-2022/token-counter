@@ -966,6 +966,14 @@ before the time charts do, and the caption says where the content is placed. Tha
 36% of the page's bytes, which is the price of a composition chart that answers *for the week
 on screen* rather than for the corpus.
 
+The pies follow a beat behind. A drag or a zoom redraws the time charts on every frame, and
+recomposing two pies at that rate reads as flicker, so they wait until the viewport has been
+still for 180 ms and then turn from the slices they show to the new ones over about half a
+second. Each pie draws the same keys in the same order every time, zero-valued ones included,
+so a slice grows from nothing or shrinks away instead of jumping; a move during a turn starts
+the next one from where it had got to. The legend reads the new shares at once. This is in
+every style, and `prefers-reduced-motion` skips the turn.
+
 What the renderer owns and what the page owns:
 
 | | |

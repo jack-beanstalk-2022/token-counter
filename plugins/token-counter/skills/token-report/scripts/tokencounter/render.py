@@ -426,13 +426,14 @@ function drawPie(){
     const msg = series.length ? 'No tokenized content in the visible range.'
                               : (CATS.note || 'No content in range.');
     host.innerHTML = `<p class="sub">${esc(msg)}</p>`;
+    host.__shown = null;
     return;
   }
   // Colour is the category's place in the corpus-wide order, so a slice keeps its colour as
   // the viewport moves and one pie can be read against the last.
   const order = CATS.order || Object.keys(tot);
-  const rows = order.map((k,i)=>({k:k, v:tot[k]||0, fill:`var(--c${i%14})`})).filter(r=>r.v>0);
-  host.innerHTML = pie(rows, sum, 'tokens in view', 'content composition by category');
+  const rows = order.map((k,i)=>({k:k, v:tot[k]||0, fill:`var(--c${i%14})`}));
+  pieTo(host, rows, sum, 'tokens in view', 'content composition by category');
 }
 
 // ---- chart 3b: which models took the input --------------------------------------------
@@ -454,21 +455,68 @@ function drawModelPie(){
       tot[k] = (tot[k]||0) + c[m]; sum += c[m];
     }
   }
-  if(!sum){ host.innerHTML = '<p class="sub">No recorded input in the visible range.</p>'; return; }
+  if(!sum){
+    host.innerHTML = '<p class="sub">No recorded input in the visible range.</p>';
+    host.__shown = null;
+    return;
+  }
   const rows = keys.concat(['other']).map(k=>({k:k, v:tot[k]||0,
-    fill: k in rank ? `var(--c${rank[k]%14})` : 'var(--dim)'})).filter(r=>r.v>0);
-  host.innerHTML = pie(rows, sum, 'recorded input in view', 'recorded input by model');
+    fill: k in rank ? `var(--c${rank[k]%14})` : 'var(--dim)'}));
+  pieTo(host, rows, sum, 'recorded input in view', 'recorded input by model');
 }
 
-/** A pie and its legend.  `rows` are {k, v, fill} in draw order; an entry that would read
- *  0.0% keeps its slice but not its legend line. */
-function pie(rows, sum, what, label){
+// ---- the pies follow the viewport, a beat behind ---------------------------------------
+// A drag or a zoom redraws the time charts on every frame; recomposing the pies at that rate
+// reads as flicker.  They wait until the viewport has been still for PIE_WAIT ms, then turn
+// from the slices they show to the new ones.  A pie's rows are the same keys in the same
+// order on every draw -- the corpus-wide order, zero-valued entries included -- so a slice
+// can grow from nothing or shrink away rather than jump.
+const REDUCE = (()=>{ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }
+                      catch(_){ return false; } })();
+const PIE_WAIT = 180, PIE_MS = 520;
+let pieTimer = 0, pieDrawn = false;
+
+function schedulePies(){
+  if(!pieDrawn){ pieDrawn = true; drawPie(); drawModelPie(); return; }   // first paint: now
+  clearTimeout(pieTimer);
+  pieTimer = setTimeout(()=>{ pieTimer = 0; drawPie(); drawModelPie(); }, PIE_WAIT);
+}
+
+/** Draw `rows` into `host`, turning from whatever fractions it shows now.  A newer call
+ *  cancels an older tween mid-flight and starts from where that one had got to.  A frame
+ *  without a timestamp (a stub DOM) lands on the end state at once. */
+function pieTo(host, rows, sum, what, label){
+  const to = rows.map(r=>r.v/sum);
+  const from = host.__shown && host.__shown.length === to.length ? host.__shown : null;
+  const tok = host.__tok = (host.__tok||0) + 1;
+  if(!from || REDUCE){
+    host.__shown = to;
+    host.innerHTML = pie(rows, sum, what, label, to);
+    return;
+  }
+  let t0 = null;
+  const step = ts=>{
+    if(host.__tok !== tok) return;                  // superseded by a newer range
+    const k = typeof ts === 'number' ? Math.min(1, (ts - (t0 === null ? (t0 = ts) : t0))/PIE_MS) : 1;
+    const e = 1 - Math.pow(1-k, 3);                 // ease out: fast start, soft landing
+    host.__shown = from.map((f,i)=>f + (to[i]-f)*e);
+    host.innerHTML = pie(rows, sum, what, label, host.__shown);
+    if(k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/** A pie and its legend.  `rows` are {k, v, fill} in draw order and `fr` the fraction of the
+ *  circle each one takes -- its share, or a moment of a tween toward it.  The legend always
+ *  reads the share; an entry that would read 0.0% keeps its slice but not its legend line. */
+function pie(rows, sum, what, label, fr){
   const size = 240, r = size/2-4, c0 = size/2;
   let s = `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="${esc(label)}">`;
   let a = -Math.PI/2;                        // first slice starts at twelve o'clock
-  for(const row of rows){
-    const frac = row.v/sum;
-    const tip = `${row.k}: ${row.v.toLocaleString()} tokens (${(100*frac).toFixed(1)}%)`;
+  for(let i=0; i<rows.length; i++){
+    const row = rows[i], frac = fr ? fr[i] : row.v/sum;
+    if(!(frac > 1e-6)) continue;
+    const tip = `${row.k}: ${row.v.toLocaleString()} tokens (${(100*row.v/sum).toFixed(1)}%)`;
     if(frac >= 1-1e-12){
       // One entry holding everything: an arc whose ends coincide draws nothing.
       s += `<circle cx="${c0}" cy="${c0}" r="${r}" fill="${row.fill}"><title>${esc(tip)}</title></circle>`;
@@ -499,8 +547,7 @@ function redraw(){
   const tk = VIEW ? ticks() : [];
   drawRL(tk);
   drawDaily(tk);
-  drawPie();
-  drawModelPie();
+  schedulePies();
 }
 
 /** Put `tAnchor` under `vxAnchor` at the given span, clamped to the domain. */
@@ -617,8 +664,6 @@ STYLE_JS = r"""
 // ---- styles: one page, several readings -----------------------------------------------
 const STYLES = D.styles || [['clinical','Clinical']];
 const ROOT = document.documentElement;
-const REDUCE = (()=>{ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }
-                      catch(_){ return false; } })();
 
 let SI = 0;
 function applyStyle(i){
