@@ -682,6 +682,12 @@ def test_render():
           'http://' not in html and 'https://' not in html
           and 'src="//' not in html)
     check('report embeds the limit series it draws', '__TC__' in html)
+    check('the page opens in Clinical and carries a rule for every other style',
+          render.STYLES[0][0] == 'clinical' and 'data-style="clinical"' in html
+          and all(f'[data-style="{s}"]' in html for s, _ in render.STYLES[1:]))
+    # The collage is drawn from a fixed seed: two renders of one model are the same page.
+    check('the Matisse collage is the same on every render',
+          '<div class="mz">' in html and render.render(model) == html)
     check('a page with no limit snapshots says so rather than drawing an empty chart',
           'No rate-limit snapshots in range' in html)
     check('totals reach the page', '500' in html or '510' in html)
