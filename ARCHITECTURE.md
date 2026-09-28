@@ -961,8 +961,10 @@ Chart 4 has no time axis of its own, so it follows the viewport by filtering. To
 content is deduplicated **per rollout file** (§3.3), which makes the file the finest unit its
 categories can honestly be placed on: `analyze` buckets each file's categories at the hour
 the file opened (`CAT_BUCKET_S`), and a bucket counts when it overlaps the visible range.
-Zooming inside one file's hour therefore does not subdivide it — the pie stops resolving
-before the time charts do, and the caption says where the content is placed. That series is
+Zooming inside one file's hour therefore does not subdivide it, and a view much narrower than
+a day mostly shows the gaps between sessions — so **zoom stops at one day**, the unit the daily
+chart is drawn in. A range with nothing in it (an idle day) keeps the pie's place as a hollow
+ring and says why, rather than collapsing the panel. That series is
 36% of the page's bytes, which is the price of a composition chart that answers *for the week
 on screen* rather than for the corpus.
 

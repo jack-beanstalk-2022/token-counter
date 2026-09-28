@@ -206,8 +206,9 @@ run('panPx(1e9)'); flush();
 check('panning stops at the start of the range', Math.abs(run('VIEW')[0] - DOM[0]) < 1,
       String(run('VIEW')));
 run('setSpan(1, VIEW[0], L)'); flush();
-check('zoom has a floor',
-      Math.abs((run('VIEW')[1] - run('VIEW')[0]) - run('MIN_SPAN')) < 1, String(run('VIEW')));
+check('zoom stops at one day, the finest range the content pie resolves',
+      run('MIN_SPAN') === 86400
+      && Math.abs((run('VIEW')[1] - run('VIEW')[0]) - 86400) < 1, String(run('VIEW')));
 run('setSpan(1e12, VIEW[0], L)'); flush();
 check('zooming out stops at the full range',
       Math.abs(run('VIEW')[0] - DOM[0]) < 1 && Math.abs(run('VIEW')[1] - DOM[1]) < 1,

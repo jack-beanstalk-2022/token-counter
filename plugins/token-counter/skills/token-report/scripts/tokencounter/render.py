@@ -228,9 +228,10 @@ const HOUR = 3600, DAY = 86400;
 const G = D.geo || {};
 const DOM = D.domain;
 let VIEW = DOM ? [DOM[0], DOM[1]] : null;
-// Deepest zoom: a thousandth of the corpus, floored at ten minutes.  It bounds how far
-// off-screen a path coordinate can land as much as it bounds the zoom.
-const MIN_SPAN = DOM ? Math.max(600, (DOM[1]-DOM[0])/1000) : 600;
+// Deepest zoom: one day.  Content is placed at the hour its file opened, so below a day the
+// composition pie stops resolving and mostly shows the gaps between sessions; a day is also
+// the unit the daily chart is drawn in.  (A corpus shorter than a day is shown whole.)
+const MIN_SPAN = 86400;
 
 let W = G.w||980, L = G.l||62, RM = G.r||48, PLOT = W-L-RM;
 
@@ -425,7 +426,7 @@ function drawPie(){
     // the range on screen -- and a reader cannot tell them apart from an empty panel.
     const msg = series.length ? 'No tokenized content in the visible range.'
                               : (CATS.note || 'No content in range.');
-    host.innerHTML = `<p class="sub">${esc(msg)}</p>`;
+    host.innerHTML = emptyPie(msg);
     host.__shown = null;
     return;
   }
@@ -456,7 +457,7 @@ function drawModelPie(){
     }
   }
   if(!sum){
-    host.innerHTML = '<p class="sub">No recorded input in the visible range.</p>';
+    host.innerHTML = emptyPie('No recorded input in the visible range.');
     host.__shown = null;
     return;
   }
@@ -504,6 +505,16 @@ function pieTo(host, rows, sum, what, label){
     if(k < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/** An empty range keeps the pie's place -- a hollow ring and the reason -- so the panel does
+ *  not collapse under the reader and spring back on the next range. */
+function emptyPie(msg){
+  const size = 240, r = size/2-4, c0 = size/2;
+  return `<div class="row" style="gap:24px"><div class="pie"><svg viewBox="0 0 ${size} ${size}" `+
+    `role="img" aria-label="${esc(msg)}"><circle cx="${c0}" cy="${c0}" r="${r-1}" fill="none" `+
+    `stroke="var(--line)" stroke-width="2" stroke-dasharray="6 6"/></svg></div>`+
+    `<p class="sub" style="max-width:220px">${esc(msg)}</p></div>`;
 }
 
 /** A pie and its legend.  `rows` are {k, v, fill} in draw order and `fr` the fraction of the
