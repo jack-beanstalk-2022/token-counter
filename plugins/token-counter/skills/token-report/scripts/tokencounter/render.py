@@ -107,15 +107,20 @@ STYLE_CSS = r"""
 .bar{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;
   gap:12px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line)}
 .brand{font-weight:700;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#stylebtn{font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:10px;
-  padding:7px 14px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
-  border-radius:999px;white-space:nowrap;transition:transform .12s,box-shadow .12s}
-#stylebtn:hover{transform:translateY(-1px)}
+/* The style switch is one dot, drawn in the style it switches *to* -- so its colours are
+   fixed here, not read from the page's variables, which belong to the style on screen. */
+#stylebtn{display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;
+  background:none;cursor:pointer;border-radius:50%;-webkit-tap-highlight-color:transparent}
 #stylebtn:focus-visible{outline:2px solid var(--uncached);outline-offset:2px}
-#stylebtn .sw-l{opacity:.7;text-transform:uppercase;font-size:11px;letter-spacing:.1em}
-#stylebtn #styleidx{opacity:.6;font-variant-numeric:tabular-nums}
-#stylebtn .sw-go{font-size:15px;line-height:1}
-.keys{color:var(--dim);font-size:11px;margin-right:8px}
+.sdot{display:block;width:18px;height:18px;border-radius:50%;background:#8a8f98;
+  transition:transform .15s ease}
+#stylebtn:hover .sdot{transform:scale(1.15)}
+/* Clinical: a crisp system-blue disc on a white panel ring with a hairline. */
+#stylebtn[data-next="clinical"] .sdot{background:#2563eb;box-shadow:0 0 0 3px #fff,0 0 0 4px #c9ced6}
+/* Matisse: a cobalt gouache cut-out, pinned slightly out of register over a sage sheet. */
+#stylebtn[data-next="matisse"] .sdot{width:20px;height:19px;background:#394ca3;
+  border-radius:60% 40% 55% 45%/55% 60% 40% 45%;box-shadow:3px 3px 0 #c9d4d2;transform:rotate(-8deg)}
+#stylebtn[data-next="matisse"]:hover .sdot{transform:rotate(-8deg) scale(1.15)}
 .mast{position:relative;padding:26px 0 6px}
 .kicker{color:var(--dim);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
 .kicker::before{content:var(--kicker)}
@@ -126,7 +131,7 @@ STYLE_CSS = r"""
 .wipe{position:fixed;inset:0;z-index:60;pointer-events:none;background:var(--bg)}
 .wipe.go{display:block;animation:wipe .56s ease-in-out forwards}
 @keyframes wipe{0%{opacity:0}45%,55%{opacity:1}100%{opacity:0}}
-@media(max-width:640px){#stylebtn .sw-l,.keys{display:none} .brand{font-size:13px}}
+@media(max-width:640px){.brand{font-size:13px}}
 
 /* ---- the WebGL layer: marks painted on a canvas behind each panel's content ----------- */
 .glc{display:none;position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
@@ -163,10 +168,6 @@ STYLE_CSS = r"""
 [data-style="matisse"] nav.bar{background:rgba(243,239,230,.86);border-bottom:2px solid var(--ink);
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 [data-style="matisse"] .brand{font:italic 400 21px/1 var(--serif);letter-spacing:0}
-[data-style="matisse"] #stylebtn{background:var(--ink);color:var(--bg);border:0;
-  border-radius:22px 9px 18px 12px/12px 18px 9px 22px}
-[data-style="matisse"] #stylebtn:hover{transform:rotate(-2deg)}
-[data-style="matisse"] .keys{color:var(--fg)}
 [data-style="matisse"] .mast{padding:64px 0 40px;min-height:42vh}
 [data-style="matisse"] .kicker{font:italic 400 17px/1.3 var(--serif);text-transform:none;letter-spacing:.01em;
   color:var(--fg)}
@@ -1463,10 +1464,11 @@ function applyStyle(i){
   SI = (i % STYLES.length + STYLES.length) % STYLES.length;
   const id = STYLES[SI][0];
   ROOT.setAttribute('data-style', id);
-  const nm = byId('stylename'), ix = byId('styleidx'), btn = byId('stylebtn');
-  if(nm) nm.textContent = STYLES[SI][1];
-  if(ix) ix.textContent = (SI+1) + '/' + STYLES.length;
-  if(btn) btn.title = 'Next: ' + STYLES[(SI+1)%STYLES.length][1] + '  (shift-click or [ for previous)';
+  const btn = byId('stylebtn'), next = STYLES[(SI+1)%STYLES.length];
+  if(btn){
+    btn.setAttribute('data-next', next[0]);                   // the dot is drawn in `next`
+    btn.setAttribute('aria-label', 'Switch to the ' + next[1] + ' style');
+  }
   try{ localStorage.setItem('tc-style', id); }catch(_){}
   try{ history.replaceState(null, '', '#style=' + id); }catch(_){}
   if(GLX) GLX.sync();
@@ -1876,7 +1878,7 @@ def render(model):
     dek = ' &middot; '.join(x for x in (
         f'{fmt(domain[0])} &ndash; {fmt(domain[1])}' if domain else '',
         f"{t['sessions']:,} sessions", f"{t['responses']:,} responses") if x)
-    first = STYLES[0]
+    first, nxt = STYLES[0], STYLES[1 % len(STYLES)]
 
     return f"""<!doctype html>
 <html lang="en" data-style="{first[0]}"><head><meta charset="utf-8">
@@ -1884,7 +1886,7 @@ def render(model):
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
 <div class="deco" aria-hidden="true">{_matisse()}<div class="wipe"></div></div>
-<nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button></div></nav>
+<nav class="bar"><div class="brand">tokenusage.dev</div><div><button id="stylebtn" type="button" data-next="{nxt[0]}" aria-label="Switch to the {esc(nxt[1])} style"><span class="sdot" aria-hidden="true"></span></button></div></nav>
 <div class="wrap">
 
 <header class="mast">

@@ -927,8 +927,11 @@ badge; measurements carry a neutral `measured` badge. The page opens with a stan
 that these are *recorded*, not billed, counts.
 
 **Styles.** The page carries two styles over one markup — **Clinical** (the original look,
-light or dark with the system, and the default) and **Matisse** — cycled by the button in the
-top bar or `[` / `]`, and remembered in `localStorage` and the URL hash (`#style=matisse`); a
+light or dark with the system, and the default) and **Matisse** — cycled by the dot at the
+top right of the bar or `[` / `]`. The dot carries no words or symbols: it is drawn in the
+style it switches *to* (a blue disc on a white ring for Clinical, a cobalt gouache cut-out
+over a sage sheet for Matisse), with fixed colours rather than the page's variables, and
+names that style only to assistive tech. Styles are remembered in `localStorage` and the URL hash (`#style=matisse`); a
 remembered style the page no longer carries falls back to the first. A style is CSS keyed on
 `html[data-style]`; every chart colour is a CSS variable, so the charts restyle without being
 redrawn except to re-measure a panel whose width changed. **Matisse** is the late cut-outs,
