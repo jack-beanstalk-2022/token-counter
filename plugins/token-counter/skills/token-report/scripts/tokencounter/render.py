@@ -794,14 +794,25 @@ GL_JS = r"""
 // stub DOM in scripts/test_page.js never reaches it.
 const GL_STYLES = D.gl_styles || [];
 const FXS = (D.fx && D.fx.length) ? D.fx : [['none', 'None', false, 'vec4 fx(vec2 uv){ return scene(uv); }']];
-const NDROP = 16;                           // ripples alive at once, at most
+// The water: a height field simulated on a coarse grid over the viewport (see SIM below).
+//   cell      grid spacing, CSS px -- larger is broader, smoother ripples
+//   brush     radius of the disturbance a pointer drags through the water, CSS px
+//   substeps  simulation steps per 1/60 s -- how fast a ripple travels
+//   damp      energy kept per step -- how long a ripple lasts
+//   visc      how much each step evens out velocity with its neighbours -- smooths chop
+//   push      height a pointer adds per CSS px it travels (heights are clamped to +-1)
+//   v0        pointer speed, px/ms, below which the water is left alone (reading, hovering)
+//   slope     how steeply the surface tilts per unit of height difference
+//   refract   CSS px the panel is displaced under a fully tilted surface
+//   disp      chromatic split, as a fraction of the displacement
+//   light     crest and trough lighting; 0 leaves only the refraction
+const WAVE = {cell: 6, brush: 24, substeps: 2, damp: .955, visc: .0155, push: 1/45, v0: .3,
+              slope: 22, refract: 36, disp: .25, light: 0};
 const GLX = (()=>{
   if(typeof document === 'undefined' || !document.createElement || !document.querySelectorAll
      || typeof WebGL2RenderingContext === 'undefined') return null;
   const RT = document.documentElement;
   const layers = new Map();                 // panel -> its canvas and GL state
-  const DROPS = [];                         // {x, y (client px), t (ms), a (0..1)}, oldest first
-  const DROP_LIFE = 2600;                   // ms until a ripple has spread out to nothing
   const T0 = performance.now();
   let ok = true, on = false, FI = 0, pal = null, queued = false, loop = 0;
 
@@ -924,39 +935,40 @@ void main(){
   vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2));
   v_uv = p; gl_Position = vec4(p*2. - 1., 0., 1.);
 }`;
-  // Water: a fast pointer drops ripples (see DROPS below).  Each is a packet of waves on an
-  // expanding ring, fading as it spreads.  The ripples bend where the effect samples the
-  // panel -- so every effect is seen through the same water -- and light the crests and
-  // shade the troughs faintly, so a ring shows over empty paper too.
+  // Water: every effect is seen through one simulated surface (SIM below).  Its height field
+  // arrives as a texture over the viewport; the post pass reads the surface's slope where
+  // this pixel is, and samples the effect that far away -- a refraction -- splitting red and
+  // blue a little either side, so a moving edge fringes as it would through a lens.
+  const f1 = x => (+x).toFixed(4);
   const POST_FS = body => `#version 300 es
 precision highp float;
-uniform sampler2D u_scene; uniform vec2 u_res; uniform float u_time, u_dpr;
-uniform vec4 u_drop[${NDROP}]; uniform int u_ndrop;
+uniform sampler2D u_scene, u_wave; uniform vec2 u_res, u_wo, u_wn; uniform float u_time, u_dpr;
 in vec2 v_uv; out vec4 o_fx;
 vec4 scene(vec2 uv){ return texture(u_scene, uv); }
 ${body}
-float h_water;
+vec3 w_n;
 vec2 water(vec2 uv){
-  vec2 p = uv*u_res, off = vec2(0.);
-  float h = 0., sig = 34.*u_dpr, lam = 8.*u_dpr;
-  for(int i = 0; i < ${NDROP}; i++){
-    if(i >= u_ndrop) break;
-    vec4 d = u_drop[i];                  // x, y in device px from the panel's bottom-left,
-    vec2 v = p - d.xy;                   // age in seconds, amplitude 0..1
-    float r = length(v), k = r - d.z*360.*u_dpr;
-    float env = exp(-k*k/(2.*sig*sig)) * exp(-d.z*1.8) * d.w;
-    float w = sin(k/lam)*env;
-    off += (r > .5 ? v/r : vec2(0.)) * w * 9.*u_dpr;
-    h += w;
-  }
-  h_water = h;
-  return uv + off/u_res;
+  vec2 cl = u_wo + vec2(uv.x, 1. - uv.y)*u_res/u_dpr;       // this pixel, client CSS px
+  vec2 g = (cl/${f1(WAVE.cell)} + .5)/u_wn, e = 1.5/u_wn;    // the grid: row 0 at the top
+  float l = texture(u_wave, g - vec2(e.x, 0.)).r, r = texture(u_wave, g + vec2(e.x, 0.)).r;
+  float t = texture(u_wave, g - vec2(0., e.y)).r, b = texture(u_wave, g + vec2(0., e.y)).r;
+  w_n = normalize(vec3(vec2(r - l, t - b)/3.*${f1(WAVE.slope)}, 1.));
+  return w_n.xy*${f1(WAVE.refract)}*u_dpr/u_res;
 }
 void main(){
-  vec4 c = fx(water(v_uv));
-  float up = max(h_water, 0.), dn = max(-h_water, 0.);
-  c = c*(1. - up*.14) + vec4(up*.14);     // a lit crest: premultiplied white over
-  c = c*(1. - dn*.07) + vec4(0., 0., 0., dn*.07);   // a shaded trough
+  vec2 off = water(v_uv), uv = v_uv + off;
+  vec4 c = fx(uv);
+  if(${f1(WAVE.disp)} > 0. && dot(off, off) > 1e-10){
+    vec2 d = off*${f1(WAVE.disp)};
+    vec4 cr = fx(uv - d), cb = fx(uv + d);
+    c = vec4(cr.r, c.g, cb.b, max(c.a, max(cr.a, cb.a)));   // still premultiplied
+  }
+  if(${f1(WAVE.light)} > 0.){
+    vec3 L = normalize(vec3(.55, .65, 1.));
+    float sp = pow(max(dot(w_n, normalize(L + vec3(0., 0., 1.))), 0.), 32.);
+    float k = clamp((dot(w_n, L) - dot(vec3(0., 0., 1.), L))*.35 + sp*1.5, -1., 1.)*${f1(WAVE.light)}*.5;
+    c = k > 0. ? c*(1. - k) + vec4(k) : c*(1. + k) + vec4(0., 0., 0., -k);
+  }
   o_fx = c;
 }`;
 
@@ -1038,19 +1050,109 @@ void main(){
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, Ly.tex, 0);
   }
 
-  /** The live ripples, in the device pixels of a canvas whose top-left is at (bx, by). */
-  function water(P, gl, bx, by, dpr, ph){
-    if(!P.u['u_drop[0]']) return;
-    const tn = performance.now(), D4 = new Float32Array(NDROP*4);
-    let n = 0;
-    for(const d of DROPS){
-      const age = (tn - d.t)/1000;
-      if(age*1000 > DROP_LIFE) continue;
-      D4.set([(d.x - bx)*dpr, ph - (d.y - by)*dpr, age, d.a], n*4);
-      n++;
+  // -- the water ----------------------------------------------------------------------------
+  // A height field on a grid over the viewport, WAVE.cell CSS px a cell: each step, a cell's
+  // velocity is pulled toward the mean height of its four neighbours, evened out a little with
+  // theirs, and damped; the height follows the velocity.  A fast pointer drags a soft brush
+  // through it.  One field serves every canvas, so a ripple crosses the tiles and the charts
+  // as one surface; it is kept to the page as it scrolls, a whole cell at a time.  Steps run
+  // only while there is motion in it, and stop when it has settled back to flat.
+  const SIM = {w: 0, h: 0, H: null, V: null, H2: null, V2: null, live: false, ver: 0,
+               sy: 0, acc: 0, t: 0};
+  function simFit(){
+    const w = Math.ceil(innerWidth/WAVE.cell) + 1, h = Math.ceil(innerHeight/WAVE.cell) + 1;
+    if(w === SIM.w && h === SIM.h) return;
+    SIM.w = w; SIM.h = h;
+    for(const k of ['H', 'V', 'H2', 'V2']) SIM[k] = new Float32Array(w*h);
+    SIM.live = false; SIM.ver++;
+  }
+  function simStep(){
+    const {w, h, H, V, H2, V2} = SIM, keep = WAVE.damp, visc = WAVE.visc;
+    let e = 0;
+    for(let y = 0; y < h; y++){
+      const up = (y > 0 ? y-1 : y)*w, dn = (y < h-1 ? y+1 : y)*w, row = y*w;
+      for(let x = 0; x < w; x++){
+        const i = row + x, lf = x > 0 ? i-1 : i, rt = x < w-1 ? i+1 : i;
+        const mh = (H[lf] + H[rt] + H[up+x] + H[dn+x])*.25;
+        const mv = (V[lf] + V[rt] + V[up+x] + V[dn+x])*.25;
+        let v = V[i] + mh - H[i];
+        v = (v + (mv - v)*visc)*keep;
+        const hh = Math.max(-1, Math.min(1, (H[i] + v)*keep));
+        V2[i] = v; H2[i] = hh;
+        e = Math.max(e, Math.abs(hh) + Math.abs(v));
+      }
     }
-    gl.uniform4fv(P.u['u_drop[0]'], D4);
-    gl.uniform1i(P.u.u_ndrop, n);
+    SIM.H = H2; SIM.H2 = H; SIM.V = V2; SIM.V2 = V;
+    return e;
+  }
+  /** Advance to the present, a fixed step at a time; false once the water is flat again. */
+  function simRun(){
+    const t = performance.now(), dt = Math.min(64, t - (SIM.t || t));
+    SIM.t = t;
+    let n = Math.round(dt/1000*60*WAVE.substeps) || 1, e = 1;
+    while(n-- > 0) e = simStep();
+    SIM.ver++;
+    if(e < 2e-3){ SIM.H.fill(0); SIM.V.fill(0); SIM.live = false; }
+    return SIM.live;
+  }
+  /** Push the surface down along a pointer's path from (x0, y0) to (x1, y1), client px. */
+  function simStir(x0, y0, x1, y1, amt){
+    simFit();
+    const {w, h, H} = SIM, c = WAVE.cell, R = WAVE.brush;
+    const dx = x1-x0, dy = y1-y0, L2 = dx*dx + dy*dy;
+    const gx0 = Math.max(0, Math.floor((Math.min(x0, x1) - R)/c)), gx1 = Math.min(w-1, Math.ceil((Math.max(x0, x1) + R)/c));
+    const gy0 = Math.max(0, Math.floor((Math.min(y0, y1) - R)/c)), gy1 = Math.min(h-1, Math.ceil((Math.max(y0, y1) + R)/c));
+    for(let gy = gy0; gy <= gy1; gy++) for(let gx = gx0; gx <= gx1; gx++){
+      const px = gx*c, py = gy*c;
+      const f = L2 > 1e-6 ? Math.max(0, Math.min(1, ((px-x0)*dx + (py-y0)*dy)/L2)) : 0;
+      const d = Math.hypot(px - (x0 + dx*f), py - (y0 + dy*f));
+      if(d < R){
+        const i = gy*w + gx;
+        H[i] = Math.max(-1, Math.min(1, H[i] + Math.cos(d/R*Math.PI/2)*amt));
+      }
+    }
+    if(!SIM.live){ SIM.live = true; SIM.t = 0; SIM.sy = scrollY; SIM.acc = 0; }
+    SIM.ver++;
+  }
+  addEventListener('scroll', ()=>{                          // the water stays with the page
+    const d = scrollY - SIM.sy;
+    SIM.sy = scrollY;
+    if(!SIM.live) return;
+    SIM.acc += d;
+    const n = Math.trunc(SIM.acc/WAVE.cell);
+    if(!n) return;
+    SIM.acc -= n*WAVE.cell;
+    const {w, h} = SIM;
+    for(const A of [SIM.H, SIM.V]){
+      if(Math.abs(n) >= h){ A.fill(0); continue; }
+      if(n > 0){ A.copyWithin(0, n*w); A.fill(0, (h-n)*w); }
+      else { A.copyWithin(-n*w, 0, (h+n)*w); A.fill(0, 0, -n*w); }
+    }
+    SIM.ver++;
+  }, {passive: true});
+
+  /** The surface, handed to one canvas whose top-left is at client (bx, by). */
+  function water(P, gl, T, bx, by){
+    if(!P.u.u_wave) return;
+    simFit();
+    gl.activeTexture(gl.TEXTURE1);
+    if(!T.wtex){
+      T.wtex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, T.wtex);
+      for(const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+                           [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
+        gl.texParameteri(gl.TEXTURE_2D, k, v);
+    } else gl.bindTexture(gl.TEXTURE_2D, T.wtex);
+    if(T.wver !== SIM.ver){
+      T.wver = SIM.ver;
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, SIM.w, SIM.h, 0, gl.RED, gl.FLOAT, SIM.H);
+    }
+    gl.uniform1i(P.u.u_wave, 1);
+    gl.uniform2f(P.u.u_wo, bx, by);
+    gl.uniform2f(P.u.u_wn, SIM.w, SIM.h);
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   function paint(Ly, panel, groups, now){
@@ -1113,16 +1215,16 @@ void main(){
     if(P.u.u_res) gl.uniform2f(P.u.u_res, pw, ph);
     if(P.u.u_dpr) gl.uniform1f(P.u.u_dpr, dpr);
     if(P.u.u_time) gl.uniform1f(P.u.u_time, now);
-    water(P, gl, bx, by, dpr, ph);
+    water(P, gl, Ly, bx, by);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  const rippling = () => {
-    const now = performance.now();
-    while(DROPS.length && now - DROPS[0].t > DROP_LIFE) DROPS.shift();
-    return DROPS.length > 0;
-  };
-  const animated = () => on && !REDUCE && (FXS[FI][2] || rippling());
+  const animated = () => on && !REDUCE && (FXS[FI][2] || SIM.live);
+  function tickFrame(){
+    loop = 0;
+    if(SIM.live && on && !REDUCE) simRun();
+    frame(true);
+  }
 
   // -- the headline numbers: their text drawn into a texture, so ripples cross them too ---
   // Each glyph is placed where the browser laid it out (a Range per character), in the
@@ -1204,27 +1306,24 @@ void main(){
     if(L.P.u.u_scene) gl.uniform1i(L.P.u.u_scene, 0);
     if(L.P.u.u_res) gl.uniform2f(L.P.u.u_res, pw, ph);
     if(L.P.u.u_dpr) gl.uniform1f(L.P.u.u_dpr, dpr);
-    water(L.P, gl, hr.left, hr.top, dpr, ph);
+    water(L.P, gl, L, hr.left, hr.top);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  // Only a fast hand makes waves: a pointer moving over ~1.4 px/ms, not dragging a chart.
-  // Drops are spaced out along the path, and stronger the faster the pointer went.
+  // A moving pointer stirs the water along its path, harder the faster it went; slower than
+  // WAVE.v0 (reading, hovering a tooltip) it leaves the surface alone.  Not a touch, and not
+  // a drag of the charts.
   let last = null;
   addEventListener('pointermove', e=>{
     if(!on || REDUCE || e.pointerType === 'touch' || e.buttons){ last = null; return; }
     const t = e.timeStamp || performance.now();
     if(last){
       const dt = Math.max(1, t - last.t), dist = Math.hypot(e.clientX - last.x, e.clientY - last.y);
-      const v = dist/dt;
-      last.v = last.v*.6 + v*.4;
-      const prev = DROPS[DROPS.length-1];
-      if(last.v > 1.4 && (!prev || Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > 56
-                          || performance.now() - prev.t > 90)){
-        DROPS.push({x: e.clientX, y: e.clientY, t: performance.now(),
-                    a: Math.min(1, .3 + (last.v - 1.4)/3)});
-        if(DROPS.length > NDROP) DROPS.shift();
-        if(!loop) loop = requestAnimationFrame(()=>{ loop = 0; frame(true); });
+      last.v = last.v*.6 + dist/dt*.4;
+      if(last.v > WAVE.v0 && dist > 0){
+        simStir(last.x, last.y, e.clientX, e.clientY,
+                Math.min(.6, dist*WAVE.push*Math.min(1, (last.v - WAVE.v0)/WAVE.v0)));
+        if(!loop) loop = requestAnimationFrame(tickFrame);
       }
       last.x = e.clientX; last.y = e.clientY; last.t = t;
     } else last = {x: e.clientX, y: e.clientY, t, v: 0};
@@ -1253,7 +1352,7 @@ void main(){
     }
     const th = document.querySelector('.tiles');
     if(!tick || !th || th.getBoundingClientRect().bottom > 0) paintText();
-    if(animated() && !loop) loop = requestAnimationFrame(()=>{ loop = 0; frame(true); });
+    if(animated() && !loop) loop = requestAnimationFrame(tickFrame);
   }
 
   // Drawn in the same task as the SVG it replaces -- a microtask, not a frame later -- so
@@ -1294,7 +1393,7 @@ void main(){
   if(btn) btn.addEventListener('click', e=>setFx(FI + (e.shiftKey ? -1 : 1)));
   try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{ pal = null; request(); }); }
   catch(_){}
-  addEventListener('resize', request);
+  addEventListener('resize', ()=>{ simFit(); request(); });
   GLH.dirty = request;
   return {sync, setFx, request};
 })();

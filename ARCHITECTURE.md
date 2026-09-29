@@ -964,17 +964,23 @@ and never runs under `prefers-reduced-motion`; an effect that fails to compile i
 in the console and drawn as `none`. No WebGL2, a failed context, a lost context, or any
 other style: `data-gl` comes off the root and the SVG marks are simply visible again.
 
-**Water.** Under whichever effect is chosen, the page is seen through water. A pointer moving
-fast (over ~1.4 px/ms; not a touch, not a drag of the charts) drops ripples along its path,
-stronger the faster it went, up to 16 alive at once for 2.6 s each. The post pass bends where
-the effect samples the panel by the sum of the ripples, packets of waves on expanding rings,
-and lights their crests and shades their troughs faintly so a ring shows over empty paper
-too. Ripples are kept in page coordinates and handed to every canvas in its own pixels, so
-one ring crosses the tiles and the charts as a single surface. The headline tiles join the
-layer for this: their text is drawn into a texture glyph by glyph, where the browser laid
-each one out and in its computed font, colour, spacing and case, and the text beneath stays
-in place, selectable and readable, just not painted. Frames run only while a ripple is alive;
-`prefers-reduced-motion` makes none.
+**Water.** Under whichever effect is chosen, the page is seen through water. The surface is
+simulated: a height field on a grid over the viewport, six CSS pixels a cell, where every step
+pulls each cell's velocity toward its neighbours' mean height, evens it out a little with
+theirs, and damps it, so a disturbance travels outward as rings, reflects and interferes, and
+dies away. A pointer moving over ~0.3 px/ms (not a touch, not a drag of the charts) drags a
+soft brush through it along its path, harder the faster it went; slower than that, reading or
+hovering a tooltip, it leaves the water alone. The post pass reads the surface's slope under
+each pixel and samples the effect that far away -- a refraction -- with red and blue split
+slightly either side, so an edge fringes as through a lens. There is no lighting by default
+(`WAVE.light`); every tunable -- cell, brush, speed, damping, viscosity, refraction, dispersion
+-- is one entry in `WAVE` in `GL_JS`. One field serves every canvas and is kept to the page
+as it scrolls, so one ring crosses the tiles and the charts as a single surface. The headline
+tiles join the layer for this: their text is drawn into a texture glyph by glyph, where the
+browser laid each one out and in its computed font, colour, spacing and case, and the text
+beneath stays in place, selectable and readable, just not painted. The simulation steps only
+while there is motion in the water and stops, flat, once it settles; `prefers-reduced-motion`
+makes none.
 
 ### 7.1 One time axis, one viewport
 
