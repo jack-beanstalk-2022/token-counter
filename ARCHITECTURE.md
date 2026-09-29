@@ -841,26 +841,31 @@ tokenCounter/
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
 │   ├── test_pipeline.py                  # §3–§7, 111 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
+│   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
 └── plugins/token-counter/
     ├── .codex-plugin/plugin.json
     ├── assets/
     │   ├── token-counter.svg, token-counter-dark.svg
     │   └── vendor/o200k_base.tiktoken    # 3.6 MB, sha256 446a9538...
-    └── skills/token-report/
-        ├── SKILL.md
-        └── scripts/
-            ├── report.py                 # the only entry point
-            └── tokencounter/
-                ├── rollout.py    # discovery, record iteration, prefilter
-                ├── classify.py   # payload -> (category, text) segments
-                ├── images.py     # dimensions from a 4 KiB prefix, token range
-                ├── encoding.py   # vendored o200k_base construction
-                ├── worker.py     # one file: parse, tokenize, reconstruct prompts
-                ├── ledger.py     # the canonical usage ledger
-                ├── index.py      # SQLite cache
-                ├── analyze.py    # aggregation into the report model
-                └── render.py     # self-contained HTML
+    └── skills/
+        ├── token-share/                  # §6.1 opt-in upload to tokenusage.dev
+        │   ├── SKILL.md
+        │   └── scripts/share.py          # imports token-report's package, no copy
+        └── token-report/
+            ├── SKILL.md
+            └── scripts/
+                ├── report.py                 # the report's only entry point
+                └── tokencounter/
+                    ├── rollout.py    # discovery, record iteration, prefilter
+                    ├── classify.py   # payload -> (category, text) segments
+                    ├── images.py     # dimensions from a 4 KiB prefix, token range
+                    ├── encoding.py   # vendored o200k_base construction
+                    ├── worker.py     # one file: parse, tokenize, reconstruct prompts
+                    ├── ledger.py     # the canonical usage ledger
+                    ├── index.py      # SQLite cache
+                    ├── analyze.py    # aggregation into the report model
+                    └── render.py     # self-contained HTML
 ```
 
 **The layout in revision 5 would not have worked.** It specified
@@ -900,7 +905,33 @@ report.py --rebuild                # discard the index and re-parse
 the output — recorded ≠ billed, cached is a subset, leads are not findings, the residual does
 not validate the tokenizer — because the report is easy to over-read.
 
-No MCP server, no daemon, no background process, no network at any point.
+No MCP server, no daemon, no background process. The report makes no network call at any
+point; §6.1 is the one opt-in exception, in a skill of its own.
+
+### 6.1 Sharing to tokenusage.dev
+
+`token-share` is a separate skill so that its description, not token-report's, decides when
+it runs: a request for a report never reaches code that can send anything. `share.py` imports
+token-report's `tokencounter` package from the sibling skill directory rather than carrying a
+copy, and runs the metrics-only pass — no tokenizer, and the index is neither read nor
+written — followed by the same `ledger.build` the report uses. Days are bucketed with
+`analyze._day`, so a day on the leaderboard is the same local day as in the report;
+`scripts/test_share.py` asserts the two agree.
+
+The payload (schema 1; the server's copy of the contract lives in the tokenusage.dev
+repository) is per-day counts plus, per month, the top ten sessions by active time and the
+top ten by tokens. A session is sent as a 16-hex-character SHA-256 prefix of its id (domain-separated, so
+it matches no other tool's hash of the same id), its first and last
+response time, **active time** — the sum of gaps between consecutive responses, leaving out
+any gap over 30 minutes — and its counts and most-used model. Nothing from content
+extraction, no `cwd`, no titles and no account claims can reach the payload: it is built
+from ledger rows and three fields of the file result (`session_id`, `date`, and the row
+timestamps), and the test asserts the exact key set.
+
+It is dry-run by default and sends only with `--yes`. A damaged record with cached > input
+or reasoning > output is clamped and counted rather than failing the share, because the
+server rejects that arithmetic outright. The first share returns a bearer token, stored per
+API endpoint in `share.json` with mode 0600; the server keeps only its hash.
 
 ---
 

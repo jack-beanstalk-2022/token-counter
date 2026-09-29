@@ -6,8 +6,12 @@ uncached input, names the account it covers, and renders a local HTML dashboard 
 Every figure comes from `~/.codex/sessions/**/rollout-*.jsonl`. One other file is read, and
 only to put a name on the report: `~/.codex/auth.json`, for the non-secret identity claims in
 its id_token — access and refresh tokens are never parsed, and `--no-account` skips the file
-entirely. No network at any point, no daemon, no interception, and no conversion of tokens
-into money or rate-limit consumption.
+entirely. The report makes no network call at any point: no daemon, no interception, and no
+conversion of tokens into money or rate-limit consumption.
+
+The one exception is opt-in and separate: the `token-share` skill posts daily token counts to
+the public leaderboard at [tokenusage.dev](https://tokenusage.dev), and only when you ask it to
+and confirm with `--yes`. See [Sharing](#sharing).
 
 ## Install
 
@@ -42,6 +46,29 @@ git clone https://github.com/jack-beanstalk-2022/token-counter
 codex plugin marketplace add ./token-counter
 codex plugin add token-counter@jack-beanstalk-2022
 ```
+
+## Sharing
+
+Ask Codex to "share my token usage to tokenusage.dev", or run it directly:
+
+```
+cd plugins/token-counter/skills/token-share
+python scripts/share.py                        # dry run: prints what would be sent, sends nothing
+python scripts/share.py --handle NAME --yes    # first share: claims NAME on the leaderboard
+python scripts/share.py --yes                  # every later share
+python scripts/share.py --delete --yes         # remove everything you shared
+```
+
+What is sent is counted from the same canonical ledger as the report, so the leaderboard and
+your local report agree day for day: per-day responses, recorded input, cached input, output
+and reasoning tokens, plus each month's top sessions by active time and by tokens (a one-way
+hash of the session id, start and end times, active time, counts and model name). Never sent:
+prompts, outputs, tool results, file contents or paths, session titles, or anything from
+`auth.json`. `--out payload.json` writes the exact payload for you to read without sending it.
+
+The first share returns a token, kept in `~/.codex/token-counter/share.json` (mode 0600); it
+is what lets you update or delete your numbers later. The leaderboard is public and every
+figure on it is self-reported.
 
 ## What it does that reported usage does not
 
@@ -112,6 +139,7 @@ python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock 
 python scripts/test_ledger.py            # 13 response-identity regressions
 python scripts/test_pipeline.py          # 146 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
+python scripts/test_share.py             # the share payload, its privacy and its transport
 python scripts/bench.py                  # the parallelism grid
 python scripts/verify_schema.py          # schema claims against the live corpus,
                                          #   including every rate-limit structural claim
