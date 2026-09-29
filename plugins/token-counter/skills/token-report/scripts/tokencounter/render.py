@@ -2,7 +2,9 @@
 
 No CDN, no network, no external fonts: the file is opened from disk and must render with
 the machine offline.  Charts are inline SVG; interaction is a few hundred lines of vanilla
-JS over an embedded JSON blob.
+JS over an embedded JSON blob.  Under Clinical the chart marks are repainted by a small
+WebGL2 layer (GL_JS) whose last pass is a swappable effect shader (FX); the SVG keeps the
+axes, text and tooltips, and keeps the marks too wherever WebGL2 is missing.
 
 The page ships its styles over one markup (STYLES), cycled by a button in the top bar or the
 `[` / `]` keys and remembered per browser.  A style never changes what the charts draw, only
@@ -120,7 +122,21 @@ STYLE_CSS = r"""
 .wipe{position:fixed;inset:0;z-index:60;pointer-events:none;background:var(--bg)}
 .wipe.go{display:block;animation:wipe .56s ease-in-out forwards}
 @keyframes wipe{0%{opacity:0}45%,55%{opacity:1}100%{opacity:0}}
-@media(max-width:640px){#stylebtn .sw-l,.keys{display:none} .brand{font-size:13px}}
+@media(max-width:640px){#stylebtn .sw-l,#fxbtn .sw-l,.keys{display:none} .brand{font-size:13px}}
+
+/* ---- the WebGL layer: marks painted on a canvas behind each panel's content ----------- */
+#fxbtn{display:none;font:inherit;font-size:13px;cursor:pointer;align-items:center;gap:8px;
+  margin-left:8px;padding:7px 12px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
+  border-radius:999px;white-space:nowrap}
+#fxbtn:focus-visible{outline:2px solid var(--uncached);outline-offset:2px}
+#fxbtn .sw-l{opacity:.7;text-transform:uppercase;font-size:11px;letter-spacing:.1em}
+.glc{display:none;position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+[data-gl] #fxbtn{display:inline-flex}
+[data-gl] .glc{display:block}
+[data-gl] .panel{position:relative}
+[data-gl] .panel>:not(.glc){position:relative}
+/* The SVG marks stay in place, transparent, so their tooltips still answer the pointer. */
+[data-gl] .mk{fill-opacity:0!important;stroke-opacity:0!important}
 
 /* ---- 1. CLINICAL: the base sheet above, light or dark with the system ----------------- */
 
@@ -221,6 +237,19 @@ const byId = id => document.getElementById(id);
 
 const HOUR = 3600, DAY = 86400;
 
+// ---- marks, for the WebGL layer -----------------------------------------------------
+// Every chart also records what it drew as plain shapes -- areas, lines, rects, pies -- in its
+// own SVG's units, keyed by the element it drew into.  Under a style that paints its marks
+// in WebGL (GL_JS below) the SVG keeps the axes, the text and the tooltips, its marks go
+// transparent, and these shapes are drawn instead.  Everywhere else nothing reads them.
+const SCN = new Map();              // host -> {svg: () => element, vb: [w, h], clip, list}
+const GLH = {dirty(){}};            // replaced by the WebGL layer once it is running
+const varOf = f => (/var\((--[\w-]+)\)/.exec(f||'') || [])[1] || f;
+function marks(host, svg, vb, clip, list){
+  if(list) SCN.set(host, {svg, vb, clip, list}); else SCN.delete(host);
+  GLH.dirty();
+}
+
 // ---- one viewport, three charts -----------------------------------------------------
 // DOM is the whole range the report covers; VIEW is the slice currently drawn.  Every chart
 // reads VIEW, so panning or zooming any one of them moves all three -- which is the reason
@@ -317,7 +346,11 @@ VMAX = VMAX || 1;
 function drawRL(tk){
   const host = byId('rlchart');
   if(!host) return;
-  if(!WINS.length){ host.innerHTML = '<p class="sub">No weekly-limit snapshots in range.</p>'; return; }
+  if(!WINS.length){
+    host.innerHTML = '<p class="sub">No weekly-limit snapshots in range.</p>';
+    marks(host, null);
+    return;
+  }
   const H = G.rl_h||300, T = G.rl_t||18, B = G.rl_b||34;
   const y  = v => H-B - (v/VMAX)*(H-B-T);
   const yp = p => H-B - (p/100)*(H-B-T);
@@ -335,6 +368,7 @@ function drawRL(tk){
   s += axis(H, T, B, tk);
 
   s += `<g clip-path="url(#tcclip-rl)">`;
+  const mk = [];
   // Window boundaries carry the date they opened.  On a narrow screen, or zoomed out far
   // enough that three windows share fifty pixels, those labels collide into a smear -- so a
   // label is drawn only where there is room for it.  The boundary line is always drawn.
@@ -355,12 +389,15 @@ function drawRL(tk){
       s += `<text x="${(X(start)+3).toFixed(1)}" y="${T+10}" fill="var(--dim)" font-size="10">${esc(day(start))}</text>`;
     }
     if(pts.length){
+      const line = [[X(start), y(0)]].concat(pts.map(p=>[X(p[0]), y(pick(p))]));
+      mk.push({t:'area', pts:line, base:y(0), c:'--uncached', a:.16},
+              {t:'line', pts:line, w:1.8, c:'--uncached'});
       const d = [`M ${X(start).toFixed(1)} ${y(0).toFixed(1)}`]
         .concat(pts.map(p=>`L ${X(p[0]).toFixed(1)} ${y(pick(p)).toFixed(1)}`));
       const last = pts[pts.length-1];
       s += `<path d="${d.join(' ')} L ${X(last[0]).toFixed(1)} ${y(0).toFixed(1)} Z" `+
-           `fill="var(--uncached)" fill-opacity=".16"/>`;
-      s += `<path d="${d.join(' ')}" fill="none" stroke="var(--uncached)" stroke-width="1.8">`+
+           `fill="var(--uncached)" fill-opacity=".16" class="mk"/>`;
+      s += `<path d="${d.join(' ')}" fill="none" stroke="var(--uncached)" stroke-width="1.8" class="mk">`+
            `<title>window opened ${esc(when(start))}\nreset quoted ${esc(w.resets_at_iso||'--')}\n`+
            `peak reported ${w.peak_pct==null?'--':w.peak_pct+'%'}\n`+
            `recorded input ${big(w.tokens.input)} over ${w.tokens.responses} responses\n`+
@@ -370,13 +407,15 @@ function drawRL(tk){
     }
     if(pcs.length){
       const d = pcs.map((p,i)=>`${i?'L':'M'} ${X(p[0]).toFixed(1)} ${yp(p[1]).toFixed(1)}`);
-      s += `<path d="${d.join(' ')}" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3"/>`;
+      s += `<path d="${d.join(' ')}" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3" class="mk"/>`;
+      mk.push({t:'line', pts:pcs.map(p=>[X(p[0]), yp(p[1])]), w:1.4, c:'--warn', dash:[5,3]});
     }
   });
   s += `</g>`;
   s += `<line x1="${L}" y1="${H-B}" x2="${W-RM}" y2="${H-B}" stroke="var(--line)"/>`;
   s += '</svg>';
   host.innerHTML = s;
+  marks(host, ()=>host.querySelector('svg'), [W, H], [L, 0, PLOT, H], mk);
 }
 
 // ---- chart 2: daily recorded input ---------------------------------------------------
@@ -391,10 +430,16 @@ function drawDaily(tk){
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const clip = svg.querySelector('.clip');
   if(clip){ clip.setAttribute('x', L); clip.setAttribute('width', PLOT); }
+  const mk = [];
   svg.querySelectorAll('g.bar').forEach(g=>{
     const a = +g.getAttribute('data-a'), b = +g.getAttribute('data-b');
     const x = X(a), sx = Math.max(X(b)-x, 0.001);
     g.setAttribute('transform', `translate(${x.toFixed(2)},0) scale(${sx.toFixed(5)},1)`);
+    // The segments never change; they are read out of the markup once.
+    if(!g.__mk) g.__mk = Array.from(g.querySelectorAll('rect.mk')).map(r=>
+      [+r.getAttribute('y'), +r.getAttribute('height'), varOf(r.getAttribute('fill'))]);
+    if(x + sx < L || x > W-RM) return;
+    for(const [ry, rh, c] of g.__mk) mk.push({t:'rect', x:x+.04*sx, y:ry, w:.92*sx, h:rh, c});
   });
   const base = svg.querySelector('.base');
   if(base){ base.setAttribute('x1', L); base.setAttribute('x2', W-RM); }
@@ -403,6 +448,7 @@ function drawDaily(tk){
   const ax = svg.querySelector('.ax');
   if(ax) ax.innerHTML = axis(H, +svg.getAttribute('data-t') || 18,
                                 +svg.getAttribute('data-b') || 34, tk);
+  marks(host, ()=>svg, [W, H], [L, 0, PLOT, H], mk);
 }
 
 // ---- chart 3: what filled the window -------------------------------------------------
@@ -428,6 +474,7 @@ function drawPie(){
                               : (CATS.note || 'No content in range.');
     host.innerHTML = emptyPie(msg);
     host.__shown = null;
+    marks(host, null);
     return;
   }
   // Colour is the category's place in the corpus-wide order, so a slice keeps its colour as
@@ -459,6 +506,7 @@ function drawModelPie(){
   if(!sum){
     host.innerHTML = emptyPie('No recorded input in the visible range.');
     host.__shown = null;
+    marks(host, null);
     return;
   }
   const rows = keys.concat(['other']).map(k=>({k:k, v:tot[k]||0,
@@ -493,6 +541,7 @@ function pieTo(host, rows, sum, what, label){
   if(!from || REDUCE){
     host.__shown = to;
     host.innerHTML = pie(rows, sum, what, label, to);
+    pieMarks(host, rows, to);
     return;
   }
   let t0 = null;
@@ -502,9 +551,18 @@ function pieTo(host, rows, sum, what, label){
     const e = 1 - Math.pow(1-k, 3);                 // ease out: fast start, soft landing
     host.__shown = from.map((f,i)=>f + (to[i]-f)*e);
     host.innerHTML = pie(rows, sum, what, label, host.__shown);
+    pieMarks(host, rows, host.__shown);
     if(k < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/** The pie as marks: the same slices `pie` draws, from the same fractions. */
+function pieMarks(host, rows, fr){
+  const size = 240;
+  marks(host, ()=>host.querySelector('.pie svg'), [size, size], null,
+        [{t:'pie', cx:size/2, cy:size/2, r:size/2-4, sep:'--panel',
+          slices:rows.map((r,i)=>[fr[i], varOf(r.fill)])}]);
 }
 
 /** An empty range keeps the pie's place -- a hollow ring and the reason -- so the panel does
@@ -530,13 +588,13 @@ function pie(rows, sum, what, label, fr){
     const tip = `${row.k}: ${row.v.toLocaleString()} tokens (${(100*row.v/sum).toFixed(1)}%)`;
     if(frac >= 1-1e-12){
       // One entry holding everything: an arc whose ends coincide draws nothing.
-      s += `<circle cx="${c0}" cy="${c0}" r="${r}" fill="${row.fill}"><title>${esc(tip)}</title></circle>`;
+      s += `<circle cx="${c0}" cy="${c0}" r="${r}" fill="${row.fill}" class="mk"><title>${esc(tip)}</title></circle>`;
       break;
     }
     const b = a + frac*2*Math.PI;
     s += `<path d="M ${c0} ${c0} L ${(c0+r*Math.cos(a)).toFixed(2)} ${(c0+r*Math.sin(a)).toFixed(2)} `+
          `A ${r} ${r} 0 ${frac>0.5?1:0} 1 ${(c0+r*Math.cos(b)).toFixed(2)} ${(c0+r*Math.sin(b)).toFixed(2)} Z" `+
-         `fill="${row.fill}" stroke="var(--panel)" stroke-width="1"><title>${esc(tip)}</title></path>`;
+         `fill="${row.fill}" stroke="var(--panel)" stroke-width="1" class="mk"><title>${esc(tip)}</title></path>`;
     a = b;
   }
   s += '</svg>';
@@ -668,6 +726,412 @@ function init(){
 init();
 """
 
+# The WebGL layer.  Under a style in GL_STYLES the chart marks -- the limit chart's area and
+# curves, the daily bars, the pie slices -- are painted by WebGL2 instead of SVG: one canvas
+# per panel, behind the panel's own content, drawing the shapes every chart records in SCN.
+# The SVG stays: it carries the axes, the text and the tooltips, and only its marks go
+# transparent.  No WebGL2, a context the browser takes back, or any other style, and the SVG
+# marks are simply left visible -- the page reads the same with or without this layer.
+#
+# A frame is drawn multisampled into an offscreen buffer, and reaches the screen through one
+# post pass: the effect.  An effect is a fragment shader over the finished panel, so adding
+# one is adding an entry to FX below; nothing else changes.
+GL_STYLES = ['clinical']
+
+# (id, label, animated, GLSL ES 3.00).  The GLSL defines `vec4 fx(vec2 uv)` and returns a
+# *premultiplied* colour (rgb never above alpha).  In scope:
+#   scene(uv)  the panel's marks, premultiplied, transparent where there are none
+#   u_res      the panel in device pixels         u_dpr   device pixels per CSS pixel
+#   u_time     seconds since the page opened -- only advances for an `animated` effect,
+#              and never under prefers-reduced-motion
+# uv runs 0..1 from the panel's bottom-left corner.  The first entry is the default, and is
+# the plain Clinical page.
+FX = [
+    ('none', 'None', False, """
+vec4 fx(vec2 uv){ return scene(uv); }"""),
+    ('glow', 'Glow', False, """
+vec4 fx(vec2 uv){
+  vec4 c = scene(uv), g = vec4(0.);
+  vec2 px = u_dpr / u_res;
+  for(int i = 0; i < 24; i++){                 // a golden-angle disc, denser at the centre
+    float f = float(i), r = 1.5 + 9. * sqrt((f + .5) / 24.), a = f * 2.39996;
+    g += scene(uv + vec2(cos(a), sin(a)) * r * px);
+  }
+  return c + g / 24. * .9 * (1. - c.a);         // a halo where the marks are not
+}"""),
+    ('scan', 'Scanlines', False, """
+vec4 fx(vec2 uv){
+  vec2 d = uv - .5;
+  vec2 off = vec2(1.5 * u_dpr / u_res.x, 0.) * (1. + 4. * dot(d, d));
+  vec4 r = scene(uv - off), g = scene(uv), b = scene(uv + off);
+  float line = .78 + .22 * step(.5, fract(gl_FragCoord.y / (3. * u_dpr)));
+  float a = (r.a + g.a + b.a) / 3.;             // each channel keeps its own coverage, so a
+  return vec4(min(vec3(r.r, g.g, b.b), vec3(a)), a) * line;   // split edge fringes, not darkens
+}"""),
+    ('sheen', 'Sheen', True, """
+vec4 fx(vec2 uv){
+  vec4 c = scene(uv);
+  float x = (uv.x * u_res.x + uv.y * u_res.y * .35) / u_dpr;
+  float band = fract(x / 900. - u_time * .18);
+  float k = smoothstep(0., .06, band) * smoothstep(.14, .06, band);
+  c.rgb = min(c.rgb + k * .45 * c.a, vec3(c.a));
+  return c;
+}"""),
+]
+
+GL_JS = r"""
+// ---- the WebGL layer ------------------------------------------------------------------
+// See GL_STYLES and FX in render.py.  Nothing here runs without a real DOM and WebGL2, so the
+// stub DOM in scripts/test_page.js never reaches it.
+const GL_STYLES = D.gl_styles || [];
+const FXS = (D.fx && D.fx.length) ? D.fx : [['none', 'None', false, 'vec4 fx(vec2 uv){ return scene(uv); }']];
+const GLX = (()=>{
+  if(typeof document === 'undefined' || !document.createElement || !document.querySelectorAll
+     || typeof WebGL2RenderingContext === 'undefined') return null;
+  const RT = document.documentElement;
+  const layers = new Map();                 // panel -> its canvas and GL state
+  const T0 = performance.now();
+  let ok = true, on = false, FI = 0, pal = null, queued = false, loop = 0;
+
+  // -- colour: the style's own variables, read once per style and theme ---------------
+  function parse(v){
+    let m = /^#([0-9a-f]{3,8})$/i.exec(v);
+    if(m){
+      let h = m[1];
+      if(h.length < 5) h = h.split('').map(c=>c+c).join('');
+      const n = i => parseInt(h.slice(i, i+2), 16)/255;
+      return [n(0), n(2), n(4), h.length >= 8 ? n(6) : 1];
+    }
+    m = /rgba?\(([^)]+)\)/.exec(v);
+    if(m){
+      const p = m[1].split(/[\s,\/]+/).filter(Boolean).map(parseFloat);
+      return [p[0]/255, p[1]/255, p[2]/255, p.length > 3 ? p[3] : 1];
+    }
+    return [.5, .5, .5, 1];
+  }
+  function rgba(name, a){                   // premultiplied, as the blend expects
+    pal = pal || {};
+    if(!(name in pal)) pal[name] = parse(getComputedStyle(RT).getPropertyValue(name).trim());
+    const c = pal[name], al = c[3]*(a == null ? 1 : a);
+    return [c[0]*al, c[1]*al, c[2]*al, al];
+  }
+
+  // -- geometry: triangles in the SVG's own units, six floats a vertex -----------------
+  function tri(V, ax, ay, bx, by, cx, cy, c){
+    V.push(ax, ay, c[0], c[1], c[2], c[3], bx, by, c[0], c[1], c[2], c[3],
+           cx, cy, c[0], c[1], c[2], c[3]);
+  }
+  function line(V, pts, hw, c){             // segments as quads, bevelled where they meet
+    let pn = null;
+    for(let i = 1; i < pts.length; i++){
+      const x0 = pts[i-1][0], y0 = pts[i-1][1], x1 = pts[i][0], y1 = pts[i][1];
+      const l = Math.hypot(x1-x0, y1-y0);
+      if(l < 1e-6) continue;
+      const nx = -(y1-y0)/l*hw, ny = (x1-x0)/l*hw;
+      tri(V, x0+nx, y0+ny, x1+nx, y1+ny, x1-nx, y1-ny, c);
+      tri(V, x0+nx, y0+ny, x1-nx, y1-ny, x0-nx, y0-ny, c);
+      if(pn){
+        tri(V, x0, y0, x0+pn[0], y0+pn[1], x0+nx, y0+ny, c);
+        tri(V, x0, y0, x0-pn[0], y0-pn[1], x0-nx, y0-ny, c);
+      }
+      pn = [nx, ny];
+    }
+  }
+  function dashes(pts, pat){                // a polyline cut into its dashes, as SVG does
+    const out = [];
+    let k = 0, left = pat[0], cur = [pts[0]];
+    for(let i = 1; i < pts.length; i++){
+      let x0 = pts[i-1][0], y0 = pts[i-1][1];
+      const x1 = pts[i][0], y1 = pts[i][1];
+      let seg = Math.hypot(x1-x0, y1-y0);
+      while(seg > left){
+        const f = left/seg;
+        x0 += (x1-x0)*f; y0 += (y1-y0)*f; seg -= left;
+        if(k%2 === 0){ cur.push([x0, y0]); out.push(cur); }
+        k++; left = pat[k%pat.length]; cur = [[x0, y0]];
+      }
+      left -= seg;
+      if(k%2 === 0) cur.push([x1, y1]);
+    }
+    if(k%2 === 0 && cur.length > 1) out.push(cur);
+    return out;
+  }
+  function geo(V, m){
+    if(m.t === 'rect'){
+      const c = rgba(m.c);
+      tri(V, m.x, m.y, m.x+m.w, m.y, m.x+m.w, m.y+m.h, c);
+      tri(V, m.x, m.y, m.x+m.w, m.y+m.h, m.x, m.y+m.h, c);
+    } else if(m.t === 'area'){
+      const c = rgba(m.c, m.a), p = m.pts;
+      for(let i = 1; i < p.length; i++){
+        tri(V, p[i-1][0], m.base, p[i-1][0], p[i-1][1], p[i][0], p[i][1], c);
+        tri(V, p[i-1][0], m.base, p[i][0], p[i][1], p[i][0], m.base, c);
+      }
+    } else if(m.t === 'line'){
+      const c = rgba(m.c, m.a);
+      if(m.pts.length < 2) return;
+      for(const run of (m.dash ? dashes(m.pts, m.dash) : [m.pts])) line(V, run, m.w/2, c);
+    } else if(m.t === 'pie'){
+      let a = -Math.PI/2;
+      const seps = [];
+      for(const [f, cv] of m.slices){
+        if(!(f > 1e-6)) continue;
+        const c = rgba(cv), b = a + f*2*Math.PI, n = Math.max(2, Math.ceil(f*160));
+        for(let j = 0; j < n; j++){
+          const u = a + (b-a)*j/n, w = a + (b-a)*(j+1)/n;
+          tri(V, m.cx, m.cy, m.cx+m.r*Math.cos(u), m.cy+m.r*Math.sin(u),
+                 m.cx+m.r*Math.cos(w), m.cy+m.r*Math.sin(w), c);
+        }
+        seps.push(a);
+        a = b;
+      }
+      if(seps.length > 1){                  // the hairline the SVG strokes between slices
+        const c = rgba(m.sep);
+        for(const s of seps)
+          line(V, [[m.cx, m.cy], [m.cx+m.r*Math.cos(s), m.cy+m.r*Math.sin(s)]], .5, c);
+      }
+    }
+  }
+
+  // -- programs --------------------------------------------------------------------------
+  const MARK_VS = `#version 300 es
+in vec2 p; in vec4 c;
+uniform vec2 u_css, u_off; uniform float u_s;
+out vec4 v_c;
+void main(){
+  vec2 q = (u_off + p*u_s)/u_css*2. - 1.;
+  v_c = c; gl_Position = vec4(q.x, -q.y, 0., 1.);
+}`;
+  const MARK_FS = `#version 300 es
+precision mediump float;
+in vec4 v_c; out vec4 o;
+void main(){ o = v_c; }`;
+  const POST_VS = `#version 300 es
+out vec2 v_uv;
+void main(){
+  vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2));
+  v_uv = p; gl_Position = vec4(p*2. - 1., 0., 1.);
+}`;
+  const POST_FS = body => `#version 300 es
+precision highp float;
+uniform sampler2D u_scene; uniform vec2 u_res; uniform float u_time, u_dpr;
+in vec2 v_uv; out vec4 o_fx;
+vec4 scene(vec2 uv){ return texture(u_scene, uv); }
+${body}
+void main(){ o_fx = fx(v_uv); }`;
+
+  function program(gl, vs, fs){
+    const sh = (type, src)=>{
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src); gl.compileShader(s);
+      if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for(let i = 0; i < n; i++){
+      const nm = gl.getActiveUniform(p, i).name;
+      u[nm] = gl.getUniformLocation(p, nm);
+    }
+    return {p, u};
+  }
+
+  /** The effect's program in this layer, compiled on first use.  One that does not compile
+   *  is reported once and drawn as `none`, rather than blanking the chart. */
+  function fxProg(Ly, i){
+    const [id, , , body] = FXS[i];
+    if(!(id in Ly.fx)){
+      try{ Ly.fx[id] = program(Ly.gl, POST_VS, POST_FS(body)); }
+      catch(e){ console.warn('token-counter: effect "'+id+'" did not compile\n'+e.message);
+                Ly.fx[id] = null; }
+    }
+    return Ly.fx[id] || (i ? fxProg(Ly, 0) : null);
+  }
+
+  function layer(panel){
+    if(layers.has(panel)) return layers.get(panel);
+    const cv = document.createElement('canvas');
+    cv.className = 'glc';
+    cv.setAttribute('aria-hidden', 'true');
+    panel.insertBefore(cv, panel.firstChild);
+    const gl = cv.getContext('webgl2', {alpha:true, premultipliedAlpha:true, antialias:false,
+                                        depth:false, stencil:false});
+    if(!gl){ cv.remove(); return null; }
+    cv.addEventListener('webglcontextlost', e=>{ e.preventDefault(); ok = false; sync(); });
+    let mark;
+    try{ mark = program(gl, MARK_VS, MARK_FS); }
+    catch(e){ console.warn('token-counter: WebGL marks did not compile\n'+e.message); cv.remove(); return null; }
+    const Ly = {cv, gl, mark, fx:{}, w:0, h:0,
+                buf: gl.createBuffer(), vao: gl.createVertexArray(), post: gl.createVertexArray(),
+                ms: gl.createFramebuffer(), rb: gl.createRenderbuffer(),
+                res: gl.createFramebuffer(), tex: gl.createTexture(),
+                samples: Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0)};
+    gl.bindVertexArray(Ly.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, Ly.buf);
+    const pa = gl.getAttribLocation(mark.p, 'p'), ca = gl.getAttribLocation(mark.p, 'c');
+    gl.enableVertexAttribArray(pa); gl.vertexAttribPointer(pa, 2, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(ca); gl.vertexAttribPointer(ca, 4, gl.FLOAT, false, 24, 8);
+    gl.bindVertexArray(null);
+    layers.set(panel, Ly);
+    return Ly;
+  }
+
+  function resize(Ly, w, h){
+    const gl = Ly.gl;
+    Ly.cv.width = Ly.w = w; Ly.cv.height = Ly.h = h;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, Ly.rb);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, Ly.samples, gl.RGBA8, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, Ly.ms);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, Ly.rb);
+    gl.bindTexture(gl.TEXTURE_2D, Ly.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, Ly.res);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, Ly.tex, 0);
+  }
+
+  function paint(Ly, panel, groups, now){
+    const gl = Ly.gl, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cw = panel.clientWidth, ch = panel.clientHeight;
+    const pw = Math.max(1, Math.round(cw*dpr)), ph = Math.max(1, Math.round(ch*dpr));
+    if(pw !== Ly.w || ph !== Ly.h) resize(Ly, pw, ph);
+    const pr = panel.getBoundingClientRect();
+    const bx = pr.left + panel.clientLeft, by = pr.top + panel.clientTop;
+
+    // 1. the marks, multisampled
+    gl.bindFramebuffer(gl.FRAMEBUFFER, Ly.ms);
+    gl.viewport(0, 0, pw, ph);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(Ly.mark.p);
+    gl.bindVertexArray(Ly.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, Ly.buf);
+    gl.uniform2f(Ly.mark.u.u_css, cw, ch);
+    for(const g of groups){
+      const svg = g.svg();
+      if(!svg) continue;
+      const r = svg.getBoundingClientRect();
+      if(!r.width) continue;
+      const V = [];
+      for(const m of g.list) geo(V, m);
+      if(!V.length) continue;
+      const s = r.width/g.vb[0], ox = r.left - bx, oy = r.top - by;
+      if(g.clip){
+        const [x, y, w, h] = g.clip;
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(Math.round((ox + x*s)*dpr), Math.round(ph - (oy + (y+h)*s)*dpr),
+                   Math.round(w*s*dpr), Math.round(h*s*dpr));
+      } else gl.disable(gl.SCISSOR_TEST);
+      gl.uniform2f(Ly.mark.u.u_off, ox, oy);
+      gl.uniform1f(Ly.mark.u.u_s, s);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(V), gl.STREAM_DRAW);
+      gl.drawArrays(gl.TRIANGLES, 0, V.length/6);
+    }
+    gl.disable(gl.SCISSOR_TEST);
+
+    // 2. resolved into a texture the effect can sample
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, Ly.ms);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, Ly.res);
+    gl.blitFramebuffer(0, 0, pw, ph, 0, 0, pw, ph, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+
+    // 3. the effect, onto the canvas
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.BLEND);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    const P = fxProg(Ly, FI);
+    if(!P){ ok = false; sync(); return; }
+    gl.useProgram(P.p);
+    gl.bindVertexArray(Ly.post);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, Ly.tex);
+    if(P.u.u_scene) gl.uniform1i(P.u.u_scene, 0);
+    if(P.u.u_res) gl.uniform2f(P.u.u_res, pw, ph);
+    if(P.u.u_dpr) gl.uniform1f(P.u.u_dpr, dpr);
+    if(P.u.u_time) gl.uniform1f(P.u.u_time, now);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  const animated = () => on && FXS[FI][2] && !REDUCE;
+
+  function frame(tick){
+    queued = false;
+    if(!on) return;
+    const now = animated() ? (performance.now() - T0)/1000 : 0;
+    const byPanel = new Map();
+    for(const p of layers.keys()) byPanel.set(p, []);    // a panel left empty is cleared
+    for(const [host, g] of SCN){
+      const panel = g.svg && host.closest && host.closest('.panel');
+      if(!panel) continue;
+      if(!byPanel.has(panel)) byPanel.set(panel, []);
+      byPanel.get(panel).push(g);
+    }
+    for(const [panel, groups] of byPanel){
+      if(tick){                                           // a clock tick skips what is off screen
+        const r = panel.getBoundingClientRect();
+        if(r.bottom < 0 || r.top > innerHeight) continue;
+      }
+      const Ly = layer(panel);
+      if(!Ly){ ok = false; sync(); return; }
+      paint(Ly, panel, groups, now);
+    }
+    if(animated() && !loop) loop = requestAnimationFrame(()=>{ loop = 0; frame(true); });
+  }
+
+  // Drawn in the same task as the SVG it replaces -- a microtask, not a frame later -- so
+  // the axes and the marks never part company during a drag.
+  function request(){
+    if(queued || !on) return;
+    queued = true;
+    (typeof queueMicrotask === 'function' ? queueMicrotask : f=>Promise.resolve().then(f))(()=>frame(false));
+  }
+
+  function label(){
+    const nm = document.getElementById('fxname'), btn = document.getElementById('fxbtn');
+    if(nm) nm.textContent = FXS[FI][1];
+    if(btn) btn.title = 'Effect -- next: ' + FXS[(FI+1)%FXS.length][1];
+  }
+
+  function setFx(i){
+    FI = (i % FXS.length + FXS.length) % FXS.length;
+    try{ localStorage.setItem('tc-fx', FXS[FI][0]); }catch(_){}
+    label();
+    request();
+  }
+
+  function sync(){
+    on = ok && GL_STYLES.indexOf(RT.getAttribute('data-style')) >= 0;
+    if(on) RT.setAttribute('data-gl', ''); else RT.removeAttribute('data-gl');
+    pal = null;                                           // a new style is a new palette
+    request();
+  }
+
+  try{
+    const id = localStorage.getItem('tc-fx');
+    const i = FXS.findIndex(f=>f[0] === id);
+    if(i >= 0) FI = i;
+  }catch(_){}
+  label();
+  const btn = document.getElementById('fxbtn');
+  if(btn) btn.addEventListener('click', e=>setFx(FI + (e.shiftKey ? -1 : 1)));
+  try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{ pal = null; request(); }); }
+  catch(_){}
+  addEventListener('resize', request);
+  GLH.dirty = request;
+  return {sync, setFx, request};
+})();
+"""
+
+
 # The style switcher.  Kept apart from JS so the charts' script reads as it did; it runs after
 # init(), touches the charts only through measure() and redraw(), and does nothing at all
 # where there is no real DOM (scripts/test_page.js).
@@ -687,6 +1151,7 @@ function applyStyle(i){
   if(btn) btn.title = 'Next: ' + STYLES[(SI+1)%STYLES.length][1] + '  (shift-click or [ for previous)';
   try{ localStorage.setItem('tc-style', id); }catch(_){}
   try{ history.replaceState(null, '', '#style=' + id); }catch(_){}
+  if(GLX) GLX.sync();
   if(VIEW){ measure(); redraw(); }
 }
 
@@ -871,7 +1336,7 @@ def _daily_svg(daily, order, domain):
             sh = (v / mx) * (DAILY_H - B - T)
             y -= sh
             parts.append(f'<rect x="0.04" y="{y:.2f}" width="0.92" height="{sh:.2f}" '
-                         f'fill="{colour(j)}"></rect>')
+                         f'fill="{colour(j)}" class="mk"></rect>')
             totals[m] = totals.get(m, 0) + v
             rows.append(f'{m} {v:,}')
         tip = (f'{d["date"]}\nrecorded {d["input"]:,}\ncached {d["cached"]:,}\n'
@@ -1064,6 +1529,8 @@ def render(model):
                 'rl_h': RL_H, 'rl_t': RL_T, 'rl_b': RL_B},
         'domain': domain,
         'styles': STYLES,
+        'gl_styles': GL_STYLES,
+        'fx': [list(f) for f in FX],
         'rate_limits': {
             'now': rl.get('now'),
             'current': rl.get('current'),
@@ -1100,7 +1567,7 @@ def render(model):
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
 <div class="deco" aria-hidden="true">{_matisse()}<div class="wipe"></div></div>
-<nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button></div></nav>
+<nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button><button id="fxbtn" type="button" aria-label="Cycle the chart effect"><span class="sw-l">FX</span><b id="fxname">{FX[0][1]}</b></button></div></nav>
 <div class="wrap">
 
 <header class="mast">
@@ -1121,6 +1588,6 @@ def render(model):
 
 </div>
 <script>window.__TC__ = {payload};</script>
-<script>{JS}{STYLE_JS}</script>
+<script>{JS}{GL_JS}{STYLE_JS}</script>
 </body></html>
 """

@@ -688,6 +688,12 @@ def test_render():
     # The collage is drawn from a fixed seed: two renders of one model are the same page.
     check('the Matisse collage is the same on every render',
           '<div class="mz">' in html and render.render(model) == html)
+    check('Clinical paints its marks in WebGL, and the first effect is the plain page',
+          'clinical' in render.GL_STYLES and render.FX[0][0] == 'none'
+          and '"gl_styles":["clinical"]' in html and 'class="mk"' in html)
+    check('every effect is a fragment shader defining fx(), with a unique id',
+          len({f[0] for f in render.FX}) == len(render.FX)
+          and all('vec4 fx(vec2 uv)' in f[3] for f in render.FX))
     check('a page with no limit snapshots says so rather than drawing an empty chart',
           'No rate-limit snapshots in range' in html)
     check('totals reach the page', '500' in html or '510' in html)

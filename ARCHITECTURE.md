@@ -942,6 +942,28 @@ pair among the first four. (Clinical's palette predates that check and does not 
 first two slots converge under deuteranopia.) `prefers-reduced-motion` stills the flower and
 the switch's fade.
 
+**The WebGL layer.** Under Clinical (`GL_STYLES` in `render.py`) the chart *marks* — the
+limit chart's area and curves, the daily bars, the pie slices — are painted by WebGL2, so
+effects can be applied to them. Every chart, in every style, records what it drew as plain
+shapes in its SVG's own units (`SCN`: areas, polylines with optional dashes, rects, pies,
+colours as CSS variable names). The layer puts one canvas behind each panel's content, reads
+the shapes, and draws them into a 4× multisampled buffer that is resolved to a texture and
+put on screen through **one post pass, the effect**. The SVG is not replaced: it still
+draws the grid, the axes, every label and every tooltip, and its marks stay in place with
+zero opacity so hover titles keep answering the pointer. The layer draws in the same task as
+the SVG it replaces (a microtask, not the next frame), so axes and marks never part during a
+drag; colours are read from the style's own variables, so light and dark follow the system.
+
+An effect is an entry in `FX`: an id, a label, whether it animates, and a GLSL ES 3.00 body
+defining `vec4 fx(vec2 uv)` over `scene(uv)` (the panel's marks, premultiplied) with
+`u_res`, `u_dpr` and `u_time` in scope. Adding one needs no other change. The first entry,
+`none`, is the plain Clinical page and the default; the page ships `glow`, `scan` and an
+animated `sheen` as examples, cycled by the **FX** button (shown only while the layer is
+running) and remembered in `localStorage`. An animated effect redraws only on-screen panels
+and never runs under `prefers-reduced-motion`; an effect that fails to compile is reported
+in the console and drawn as `none`. No WebGL2, a failed context, a lost context, or any
+other style: `data-gl` comes off the root and the SVG marks are simply visible again.
+
 ### 7.1 One time axis, one viewport
 
 Charts 2 and 3 answer different questions about the same hours, and are only useful together
