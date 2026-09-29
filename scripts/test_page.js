@@ -127,6 +127,10 @@ check('both charts draw the same ticks at the same x',
       t1.length >= 2 && JSON.stringify(t1) === JSON.stringify(t2),
       JSON.stringify([t1, t2]));
 
+check('the daily chart has tick labels but no vertical guides; the limit chart keeps its guides',
+      !/<line/.test(ax.innerHTML) && /stroke-dasharray="2 4"/.test(rlHost.innerHTML),
+      ax.innerHTML.slice(0, 120));
+
 // 2. the same instant lands on the same x in both charts
 const a0 = +bars[0].getAttribute('data-a');
 const xOfDay = +transforms()[0].match(/translate\(([-\d.]+),/)[1];

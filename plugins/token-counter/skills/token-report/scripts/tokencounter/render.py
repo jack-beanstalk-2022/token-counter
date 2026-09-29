@@ -317,12 +317,14 @@ function ticks(){
 const tickLabel = (t, step) =>
   (step >= DAY || new Date(t*1000).getHours()===0) ? day(t) : hm(t);
 
-function axis(h, top, bot, tk){
+/** Tick labels along the bottom, and -- unless `grid` is false -- a dashed guide up from each.
+ *  The daily chart takes the labels only: its bars already mark the days. */
+function axis(h, top, bot, tk, grid = true){
   let s = '';
   for(const [t, step] of tk){
     const xx = X(t);
     if(xx < L-0.5 || xx > W-RM+0.5) continue;
-    s += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${h-bot}" `+
+    if(grid) s += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${h-bot}" `+
          `stroke="var(--line)" stroke-width="1" stroke-dasharray="2 4"/>`;
     s += `<text x="${xx.toFixed(1)}" y="${h-bot+15}" text-anchor="middle" fill="var(--dim)" `+
          `font-size="11">${esc(tickLabel(t, step))}</text>`;
@@ -447,7 +449,7 @@ function drawDaily(tk){
   if(peak) peak.setAttribute('x', L);
   const ax = svg.querySelector('.ax');
   if(ax) ax.innerHTML = axis(H, +svg.getAttribute('data-t') || 18,
-                                +svg.getAttribute('data-b') || 34, tk);
+                                +svg.getAttribute('data-b') || 34, tk, false);
   marks(host, ()=>svg, [W, H], [L, 0, PLOT, H], mk);
 }
 
