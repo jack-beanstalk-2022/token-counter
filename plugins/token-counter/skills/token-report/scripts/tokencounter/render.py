@@ -628,18 +628,72 @@ function redraw(){
   schedulePies();
 }
 
-/** Put `tAnchor` under `vxAnchor` at the given span, clamped to the domain. */
-function setSpan(span, tAnchor, vxAnchor){
-  if(!VIEW) return;
+/** The view that puts `tAnchor` under `vxAnchor` at the given span, clamped to the domain. */
+function spanned(span, tAnchor, vxAnchor){
   const full = DOM[1]-DOM[0];
   span = clamp(span, Math.min(MIN_SPAN, full), full);
   const v0 = clamp(tAnchor - (clamp(vxAnchor, L, W-RM)-L)/PLOT*span, DOM[0], DOM[1]-span);
-  VIEW = [v0, v0+span];
+  return [v0, v0+span];
+}
+
+/** Jump there at once: the hand is on the chart (a pinch), or a caller wants it now. */
+function setSpan(span, tAnchor, vxAnchor){
+  if(!VIEW) return;
+  stopGlide();
+  VIEW = spanned(span, tAnchor, vxAnchor);
   schedule();
+}
+
+// ---- zoom that glides -----------------------------------------------------------------
+// A wheel notch or a double-click moves toward its view instead of jumping to it, easing
+// out over about GLIDE_MS.  The move is a true zoom: the one moment that sits at the same x
+// in the view it leaves and the view it reaches stays put the whole way, and the span
+// changes geometrically, so every frame is the same factor closer.  Wheel turns that land
+// mid-glide steer the goal, so a fast spin runs as one smooth zoom.  A drag or a pinch takes
+// over at once; prefers-reduced-motion jumps.
+const WHEEL_GAP = 250;                        // ms of wheel silence that ends a gesture
+const GLIDE_MS = 90;                         // time constant: ~95% there in three of these
+let GOAL = null, glideRaf = 0, glideT = 0;
+
+function stopGlide(){ GOAL = null; }
+
+function glideTo(v){
+  if(!VIEW) return;
+  if(REDUCE || typeof requestAnimationFrame !== 'function'){ VIEW = v; GOAL = null; schedule(); return; }
+  GOAL = v;
+  if(!glideRaf){ glideT = 0; glideRaf = requestAnimationFrame(glide); }
+}
+
+function glide(ts){
+  glideRaf = 0;
+  if(!GOAL) return;
+  const dt = glideT && typeof ts === 'number' ? Math.min(64, ts - glideT) : 16;
+  glideT = ts;
+  const k = 1 - Math.exp(-dt/GLIDE_MS);
+  const a0 = VIEW[0], s0 = VIEW[1]-VIEW[0], a1 = GOAL[0], s1 = GOAL[1]-GOAL[0];
+  let a, s;
+  if(Math.abs(s1 - s0) > s0*1e-6){
+    const f = (a1*s0 - a0*s1)/(s0 - s1);      // the moment both views put at the same x
+    s = s0*Math.pow(s1/s0, k);
+    a = f - (f - a0)/s0*s;
+  } else { s = s0; a = a0 + (a1 - a0)*k; }    // equal spans: a plain pan
+  a = clamp(a, DOM[0], DOM[1]-s);
+  VIEW = [a, a+s];
+  if(Math.abs(s - s1) < s1*1e-3 && Math.abs(a - a1) < s1*5e-4){ VIEW = GOAL; GOAL = null; }
+  redraw();
+  if(GOAL) glideRaf = requestAnimationFrame(glide);
+}
+
+/** Zoom by `factor` about the moment under `vx`, gliding; turns compound on the goal. */
+function zoomAt(factor, vx){
+  if(!VIEW) return;
+  const base = GOAL || VIEW;
+  glideTo(spanned((base[1]-base[0])*factor, Tat(vx), vx));
 }
 
 function panPx(dvx){
   if(!VIEW) return;
+  stopGlide();
   const span = VIEW[1]-VIEW[0];
   const v0 = clamp(VIEW[0] - dvx/PLOT*span, DOM[0], DOM[1]-span);
   VIEW = [v0, v0+span];
@@ -648,6 +702,7 @@ function panPx(dvx){
 
 function reset(){
   if(!DOM) return;
+  stopGlide();
   VIEW = [DOM[0], DOM[1]];
   schedule();
 }
@@ -656,7 +711,7 @@ function reset(){
 // two-finger pinch on a touch screen, and a double-click back to the full range.
 function bind(el){
   const pts = new Map();                     // live pointers, in viewBox x
-  let pinch = null;
+  let pinch = null, wheelAt = -1e9, wheelMode = null;
   const scale = () => W/(el.getBoundingClientRect().width || W);
   const vxOf = e => {
     const r = el.getBoundingClientRect();
@@ -671,16 +726,31 @@ function bind(el){
       return;
     }
     if(!e.deltaY) return;
+    // Zoomed all the way out, scrolling down scrolls the page.  A gesture -- wheel events
+    // no more than WHEEL_GAP ms apart -- stays with whichever it started on, so a swipe that
+    // zooms out to the full range spends its momentum there and the *next* one scrolls.
+    const t = e.timeStamp || Date.now();
+    if(t - wheelAt > WHEEL_GAP) wheelMode = null;
+    wheelAt = t;
+    const base = GOAL || VIEW;
+    if(wheelMode === 'page') return;
+    if(e.deltaY > 0 && base[1]-base[0] >= (DOM[1]-DOM[0])*(1-1e-9)){
+      if(wheelMode !== 'zoom'){ wheelMode = 'page'; return; }
+      e.preventDefault();
+      return;
+    }
+    wheelMode = 'zoom';
     e.preventDefault();
     const unit = e.deltaMode===1 ? 0.05 : (e.deltaMode===2 ? 0.8 : 0.002);
     const vx = clamp(vxOf(e), L, W-RM);
-    setSpan((VIEW[1]-VIEW[0])/Math.exp(-e.deltaY*unit), Tat(vx), vx);
+    zoomAt(1/Math.exp(-e.deltaY*unit), vx);
   }, {passive:false});
 
   el.addEventListener('pointerdown', e=>{
     if(!VIEW || (e.pointerType==='mouse' && e.button!==0)) return;
     try{ el.setPointerCapture(e.pointerId); }catch(_){}
     pts.set(e.pointerId, vxOf(e));
+    stopGlide();
     el.classList.add('drag');
     if(pts.size===2){
       const ids = Array.from(pts.keys());
@@ -714,7 +784,7 @@ function bind(el){
   el.addEventListener('pointerup', lift);
   el.addEventListener('pointercancel', lift);
   el.addEventListener('lostpointercapture', lift);
-  el.addEventListener('dblclick', e=>{ e.preventDefault(); reset(); });
+  el.addEventListener('dblclick', e=>{ e.preventDefault(); if(DOM) glideTo([DOM[0], DOM[1]]); });
 }
 
 function init(){
