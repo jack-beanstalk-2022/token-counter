@@ -43,12 +43,15 @@ Sending needs network access. Inside the Codex sandbox the network is usually of
 ## What is sent, and what never is
 
 Sent: per-day counts (responses, recorded input, cached input, output, reasoning, sessions
-started), and for each month the top sessions by active time and by tokens, each as a
-one-way hash of its id, start and end times, active time, token counts and the model name.
+started); for each month the top sessions by active time and by tokens, each as a one-way
+hash of its id, start and end times, active time, token counts and the model name; and for
+each weekly rate-limit window, its start, the plan type and the percentages used that Codex
+logged in its rate-limit snapshots, and the tokens counted in it. tokenusage.dev uses the
+windows to estimate how many tokens each plan's weekly limit holds.
 
 Never sent: prompts, outputs, tool results, file contents or paths, working directories,
-session titles, anything from `auth.json`, the account email, or the plan. The handle the
-user picks is the only identity.
+session titles, anything from `auth.json`, or the account email. The plan type comes from
+the rollout logs, not from the account. The handle the user picks is the only identity.
 
 Use `--out payload.json` to write the exact payload to a file for the user to inspect,
 without sending it.
