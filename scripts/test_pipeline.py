@@ -686,6 +686,19 @@ def test_render():
           render.STYLES[0][0] == 'clinical' and 'data-style="clinical"' in html
           and all(f'[data-style="{s}"]' in html for s, _ in render.STYLES[1:]))
     # The collage is drawn from a fixed seed: two renders of one model are the same page.
+    # Clinical's palette is the original chart palette, and the WebGL layer reads it from these
+    # variables rather than carrying colours of its own: pin them, light and dark.
+    light = ('--c0:#2563eb;--c1:#7c3aed;--c2:#db2777;--c3:#ea580c;--c4:#ca8a04;--c5:#16a34a;'
+             '--c6:#0891b2;--c7:#4f46e5;--c8:#9333ea;--c9:#e11d48;--c10:#65a30d;--c11:#0d9488;'
+             '--c12:#a16207;--c13:#475569;')
+    dark = ('--c0:#60a5fa;--c1:#a78bfa;--c2:#f472b6;--c3:#fb923c;--c4:#fbbf24;--c5:#4ade80;'
+            '--c6:#22d3ee;--c7:#818cf8;--c8:#c084fc;--c9:#fb7185;--c10:#a3e635;--c11:#2dd4bf;'
+            '--c12:#d6b45b;--c13:#94a3b8;')
+    flat = html.replace(' ', '').replace('\n', '')
+    check('Clinical keeps the original chart palette, light and dark',
+          light in flat and dark in flat
+          and '--cached:#93b4f5;--uncached:#2563eb;--out:#10b981;' in flat
+          and '--cached:#2b4270;--uncached:#60a5fa;--out:#34d399;' in flat)
     check('the Matisse collage is the same on every render',
           '<div class="mz">' in html and render.render(model) == html)
     check('Clinical paints its marks in WebGL, and the first effect is the plain page',
