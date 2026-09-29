@@ -8,7 +8,8 @@ keeps the axes, text and tooltips, and keeps the marks too wherever WebGL2 is mi
 
 The page ships its styles over one markup (STYLES), cycled by a button in the top bar or the
 `[` / `]` keys and remembered per browser.  A style never changes what the charts draw, only
-the colours, type and paper they are drawn on.
+the colours, type and paper they are drawn on -- even Nocturne, which is a 3D scene (SCENE_JS)
+built from the very marks the charts record, with the page kept beneath it, unpainted.
 
 The three charts share **one time axis and one viewport**.  The limit chart and the daily
 chart are drawn over the same domain with the same margins, so a moment sits at the same x
@@ -35,7 +36,7 @@ DAILY_H, DAILY_T, DAILY_B = 210, 18, 34
 
 # The page styles, in the order the button cycles them; the first is the default.  The page
 # reads this list from its payload, so it is written down once.
-STYLES = [('clinical', 'Clinical'), ('matisse', 'Matisse')]
+STYLES = [('clinical', 'Clinical'), ('matisse', 'Matisse'), ('nocturne', 'Nocturne')]
 
 CSS = """
 :root{
@@ -121,6 +122,10 @@ STYLE_CSS = r"""
 #stylebtn[data-next="matisse"] .sdot{width:20px;height:19px;background:#394ca3;
   border-radius:60% 40% 55% 45%/55% 60% 40% 45%;box-shadow:3px 3px 0 #c9d4d2;transform:rotate(-8deg)}
 #stylebtn[data-next="matisse"]:hover .sdot{transform:rotate(-8deg) scale(1.15)}
+/* Nocturne: a gold lamp on night water -- a lit sphere, not a disc, for the one style in 3D. */
+#stylebtn[data-next="nocturne"] .sdot{
+  background:radial-gradient(circle at 34% 30%,#fff1c9 0 9%,#e2ae4c 34%,#8a5a16 74%,#4b300a);
+  box-shadow:0 0 0 3px #0b1720,0 0 9px 3px rgba(226,178,79,.55)}
 .mast{position:relative;padding:26px 0 6px}
 .kicker{color:var(--dim);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
 .kicker::before{content:var(--kicker)}
@@ -222,6 +227,51 @@ STYLE_CSS = r"""
   [data-style="matisse"] .mast{padding-top:40px;min-height:0}
   [data-style="matisse"] .kicker{max-width:64%}
   [data-style="matisse"] .tile .v{font-size:32px}}
+
+/* ---- 3. NOCTURNE: the report as sculptures on night water, in blue and gold ----------- */
+/* Whistler's Nocturnes -- the Thames after dark, gaslight doubled in still water, and the
+   gold sparks of The Falling Rocket.  The page itself is a 3D scene (SCENE_JS); what follows
+   is first the sheet it falls back to without WebGL2, then the chrome the scene keeps.  The
+   categorical palette is validated on the plinth (#10202a): all thirteen slots inside the
+   dark lightness band and over the chroma floor, neighbours clear of the colour-vision and
+   normal-vision floors, every pair among the first four as well, and each at 3:1 or more. */
+:root[data-style="nocturne"]{color-scheme:dark;
+  --bg:#0b1720;--panel:#10202a;--line:#1f3441;--fg:#efe6d2;--dim:#8fa3ad;
+  --cached:#2d4c63;--uncached:#7fb2d8;--out:#3fb58f;--warn:#e0b24f;--warn-bg:#3a2e12;
+  --c0:#c1821f;--c1:#4174c7;--c2:#b04466;--c3:#14a685;--c4:#a55cc0;--c5:#4f9a5c;--c6:#8f76cc;
+  --c7:#5f9234;--c8:#6a78d6;--c9:#878c22;--c10:#7a86e0;--c11:#c96a22;--c12:#3f86c8;--c13:#6f8290;
+  --n-zenith:#02070b;--n-sky:#0a1b26;--n-haze:#2f4a55;--n-water:#040c12;--n-shore:#0c1a22;
+  --n-lamp:#f3c878;--n-stone:#15242d;--n-trim:#b98f45;--n-spark:#ffc766;
+  --serif:"Baskerville","Libre Baskerville","Big Caslon","Palatino Linotype",Palatino,"Book Antiqua",
+    Georgia,serif;
+  --kicker:"Nocturne in blue and gold \00B7  Codex usage, recounted locally"}
+[data-style="nocturne"] body{background:radial-gradient(120% 70% at 50% 0,#10283a,var(--bg) 70%) fixed}
+[data-style="nocturne"] nav.bar{background:rgba(11,23,32,.82);border-bottom:1px solid #2a3e49;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+[data-style="nocturne"] .brand{font:italic 400 19px/1 var(--serif);color:var(--warn);letter-spacing:.01em}
+[data-style="nocturne"] .kicker{font:italic 400 15px/1.3 var(--serif);text-transform:none;letter-spacing:.01em}
+[data-style="nocturne"] .mast h1{font:400 clamp(38px,6vw,64px)/1 var(--serif);letter-spacing:-.01em;
+  margin:10px 0 12px}
+[data-style="nocturne"] .tile{background:linear-gradient(#132733,#0f1e28);border:1px solid #2a3e49;
+  box-shadow:inset 0 1px 0 rgba(224,178,79,.18)}
+[data-style="nocturne"] .tile .v{font-weight:400;color:#f6e7c1}
+[data-style="nocturne"] .panel{border-color:#2a3e49;box-shadow:inset 0 1px 0 rgba(224,178,79,.14)}
+
+/* The scene is running: it fills the window, and the page beneath it stays in place for
+   assistive tech -- every number is still text there -- but is not painted and takes no
+   pointer.  The one control kept is the style switch, whose dot the scene draws itself. */
+.s3d{display:none;position:fixed;inset:0;width:100%;height:100%;z-index:10;touch-action:none;
+  outline:none;-webkit-tap-highlight-color:transparent}
+[data-s3d] .s3d{display:block}
+[data-s3d] body{overflow:hidden;background:var(--bg)}
+[data-s3d] .wrap{position:fixed;inset:0;opacity:0;pointer-events:none;overflow:hidden}
+[data-s3d] nav.bar{background:none;border:0;backdrop-filter:none;-webkit-backdrop-filter:none;
+  pointer-events:none}
+[data-s3d] .brand{opacity:0}
+[data-s3d] #stylebtn{pointer-events:auto}
+[data-s3d] #stylebtn .sdot{opacity:0}
+.s3d-live{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);
+  white-space:nowrap}
 """
 
 JS = """
@@ -247,13 +297,17 @@ const HOUR = 3600, DAY = 86400;
 // Every chart also records what it drew as plain shapes -- areas, lines, rects, pies -- in its
 // own SVG's units, keyed by the element it drew into.  Under a style that paints its marks
 // in WebGL (GL_JS below) the SVG keeps the axes, the text and the tooltips, its marks go
-// transparent, and these shapes are drawn instead.  Everywhere else nothing reads them.
-const SCN = new Map();              // host -> {svg: () => element, vb: [w, h], clip, list}
+// transparent, and these shapes are drawn instead.  Under a style that is a 3D scene
+// (SCENE_JS) the same shapes are built into it, and `plot` -- the plot rectangle, [x, y, w, h]
+// in the SVG's units -- is what places them.  Everywhere else nothing reads them.
+const SCN = new Map();              // host -> {svg: () => element, vb: [w, h], clip, list, plot}
 const GLH = {dirty(){}};            // replaced by the WebGL layer once it is running
+const S3H = {dirty(){}};            // replaced by the 3D scene once it is running
 const varOf = f => (/var\((--[\w-]+)\)/.exec(f||'') || [])[1] || f;
-function marks(host, svg, vb, clip, list){
-  if(list) SCN.set(host, {svg, vb, clip, list}); else SCN.delete(host);
+function marks(host, svg, vb, clip, list, plot){
+  if(list) SCN.set(host, {svg, vb, clip, list, plot}); else SCN.delete(host);
   GLH.dirty();
+  S3H.dirty();
 }
 
 // ---- one viewport, three charts -----------------------------------------------------
@@ -292,9 +346,9 @@ function measure(){
 const PITCH = 64;                          // smallest gap between two tick labels, in px
                                            // -- a date at 11px is about 40 of them, and a
                                            // phone's plot is only ~230 wide
-function ticks(){
+function ticks(plot = PLOT){               // plot: the width the ticks are laid over, px
   const span = VIEW[1]-VIEW[0];
-  const fits = s => s/span*PLOT >= PITCH;
+  const fits = s => s/span*plot >= PITCH;
   const out = [];
   let step = 0;
   for(const s of [300, 600, 900, 1800, HOUR, 2*HOUR, 3*HOUR, 6*HOUR, 12*HOUR])
@@ -382,7 +436,7 @@ function drawRL(tk){
   // enough that three windows share fifty pixels, those labels collide into a smear -- so a
   // label is drawn only where there is room for it.  The boundary line is always drawn.
   let lastLbl = -1e9;
-  WINS.forEach(w=>{
+  WINS.forEach((w, wi)=>{
     const pts = w.cum_points||[], pcs = w.pct_points||[];
     const start = w.reset_at!=null ? w.reset_at : (pts.length?pts[0][0]:null);
     if(start==null) return;
@@ -399,8 +453,8 @@ function drawRL(tk){
     }
     if(pts.length){
       const line = [[X(start), y(0)]].concat(pts.map(p=>[X(p[0]), y(pick(p))]));
-      mk.push({t:'area', pts:line, base:y(0), c:'--uncached', a:.16},
-              {t:'line', pts:line, w:1.8, c:'--uncached'});
+      mk.push({t:'area', pts:line, base:y(0), c:'--uncached', a:.16, win:wi},
+              {t:'line', pts:line, w:1.8, c:'--uncached', win:wi});
       const d = [`M ${X(start).toFixed(1)} ${y(0).toFixed(1)}`]
         .concat(pts.map(p=>`L ${X(p[0]).toFixed(1)} ${y(pick(p)).toFixed(1)}`));
       const last = pts[pts.length-1];
@@ -417,14 +471,14 @@ function drawRL(tk){
     if(pcs.length){
       const d = pcs.map((p,i)=>`${i?'L':'M'} ${X(p[0]).toFixed(1)} ${yp(p[1]).toFixed(1)}`);
       s += `<path d="${d.join(' ')}" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3" class="mk"/>`;
-      mk.push({t:'line', pts:pcs.map(p=>[X(p[0]), yp(p[1])]), w:1.4, c:'--warn', dash:[5,3]});
+      mk.push({t:'line', pts:pcs.map(p=>[X(p[0]), yp(p[1])]), w:1.4, c:'--warn', dash:[5,3], win:wi});
     }
   });
   s += `</g>`;
   s += `<line x1="${L}" y1="${H-B}" x2="${W-RM}" y2="${H-B}" stroke="var(--line)"/>`;
   s += '</svg>';
   host.innerHTML = s;
-  marks(host, ()=>host.querySelector('svg'), [W, H], [L, 0, PLOT, H], mk);
+  marks(host, ()=>host.querySelector('svg'), [W, H], [L, 0, PLOT, H], mk, [L, T, PLOT, H-B-T]);
 }
 
 // ---- chart 2: daily recorded input ---------------------------------------------------
@@ -448,7 +502,7 @@ function drawDaily(tk){
     if(!g.__mk) g.__mk = Array.from(g.querySelectorAll('rect.mk')).map(r=>
       [+r.getAttribute('y'), +r.getAttribute('height'), varOf(r.getAttribute('fill'))]);
     if(x + sx < L || x > W-RM) return;
-    for(const [ry, rh, c] of g.__mk) mk.push({t:'rect', x:x+.04*sx, y:ry, w:.92*sx, h:rh, c});
+    for(const [ry, rh, c] of g.__mk) mk.push({t:'rect', x:x+.04*sx, y:ry, w:.92*sx, h:rh, c, day:a});
   });
   const base = svg.querySelector('.base');
   if(base){ base.setAttribute('x1', L); base.setAttribute('x2', W-RM); }
@@ -457,7 +511,8 @@ function drawDaily(tk){
   const ax = svg.querySelector('.ax');
   if(ax) ax.innerHTML = axis(H, +svg.getAttribute('data-t') || 18,
                                 +svg.getAttribute('data-b') || 34, tk, false);
-  marks(host, ()=>svg, [W, H], [L, 0, PLOT, H], mk);
+  const T = +svg.getAttribute('data-t') || 18, B = +svg.getAttribute('data-b') || 34;
+  marks(host, ()=>svg, [W, H], [L, 0, PLOT, H], mk, [L, T, PLOT, H-B-T]);
 }
 
 // ---- chart 3: what filled the window -------------------------------------------------
@@ -1451,6 +1506,1527 @@ void main(){
 """
 
 
+# The 3D scene.  Under a style in SCENE_STYLES the page is not drawn at all: one canvas fills
+# the window with a scene built from the same marks the charts record in SCN (so it cannot
+# show a figure the page does not), and the page stays beneath it, unpainted, for assistive
+# tech.  Each chart is an exhibit -- the limit windows as panes of glass, the daily input as
+# a skyline, the pies as medallions, the headline numbers as words afloat -- and the one
+# brought forward stands on the water, square to the camera, while the rest hang in the sky.
+# The time charts in front take the same wheel, drag and pinch as on the page, and move the
+# one shared viewport.  No WebGL2, a context lost or a shader that will not compile, and the
+# page is simply painted again, in the style's own 2D sheet.
+SCENE_STYLES = ['nocturne']
+
+SCENE_JS = r"""
+// ---- Nocturne: the report as sculptures on night water -----------------------------------
+// See SCENE_STYLES in render.py.  Two halves.  N3 is pure -- matrices, the solid each chart
+// becomes, where every exhibit stands, what a ray through the pointer touches -- with no DOM
+// and no GL, so scripts/test_page.js checks it.  S3D is the WebGL2 runtime around it, and is
+// null wherever there is no real DOM or no WebGL2: the page then reads as its 2D sheet.
+//
+// Every solid is built from what its chart recorded in SCN, in the SVG's own units, placed by
+// the plot rectangle it recorded with it: the scene cannot draw a figure the page did not.
+const SCENE_STYLES = D.scene_styles || [];
+
+const N3 = (()=>{
+  // -- vectors and 4x4 matrices, column-major as GL takes them -------------------------
+  const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+  const mul3 = (a, k) => [a[0]*k, a[1]*k, a[2]*k];
+  const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const norm = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0]/l, a[1]/l, a[2]/l]; };
+  const lerp = (a, b, k) => a + (b - a)*k;
+
+  function mul(a, b){
+    const o = new Array(16);
+    for(let c = 0; c < 4; c++) for(let r = 0; r < 4; r++)
+      o[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1] + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
+    return o;
+  }
+  function persp(fy, asp, n, f){
+    const t = 1/Math.tan(fy/2), d = n - f;
+    return [t/asp,0,0,0, 0,t,0,0, 0,0,(f+n)/d,-1, 0,0,2*f*n/d,0];
+  }
+  function look(e, t){
+    const z = norm(sub(e, t)), x = norm(cross([0, 1, 0], z)), y = cross(z, x);
+    return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,e),-dot(y,e),-dot(z,e),1];
+  }
+  /** T(p) Ry(yaw) Rx(pitch) Rz(roll) S(s) T(-c): an exhibit turned and scaled about its centre c.
+   *  Yaw turns its face (+z) toward +x; pitch tips its face down; roll leans it left. */
+  function pose(p, yaw, pitch, roll, s, c){
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cx = Math.cos(pitch), sx = Math.sin(pitch);
+    const cz = Math.cos(roll), sz = Math.sin(roll);
+    const ry = v => [cy*v[0] + sy*v[2], v[1], -sy*v[0] + cy*v[2]];
+    const a = ry([cz, sz*cx, sz*sx]), b = ry([-sz, cz*cx, cz*sx]), d = ry([0, -sx, cx]);
+    const t = [0, 1, 2].map(i => p[i] - s*(a[i]*c[0] + b[i]*c[1] + d[i]*c[2]));
+    return [a[0]*s,a[1]*s,a[2]*s,0, b[0]*s,b[1]*s,b[2]*s,0, d[0]*s,d[1]*s,d[2]*s,0, t[0],t[1],t[2],1];
+  }
+  function inv(m){
+    const [a00,a01,a02,a03,a10,a11,a12,a13,a20,a21,a22,a23,a30,a31,a32,a33] = m;
+    const b00 = a00*a11 - a01*a10, b01 = a00*a12 - a02*a10, b02 = a00*a13 - a03*a10;
+    const b03 = a01*a12 - a02*a11, b04 = a01*a13 - a03*a11, b05 = a02*a13 - a03*a12;
+    const b06 = a20*a31 - a21*a30, b07 = a20*a32 - a22*a30, b08 = a20*a33 - a23*a30;
+    const b09 = a21*a32 - a22*a31, b10 = a21*a33 - a23*a31, b11 = a22*a33 - a23*a32;
+    const det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06;
+    const k = det ? 1/det : 0;
+    return [(a11*b11 - a12*b10 + a13*b09)*k, (a02*b10 - a01*b11 - a03*b09)*k,
+            (a31*b05 - a32*b04 + a33*b03)*k, (a22*b04 - a21*b05 - a23*b03)*k,
+            (a12*b08 - a10*b11 - a13*b07)*k, (a00*b11 - a02*b08 + a03*b07)*k,
+            (a32*b02 - a30*b05 - a33*b01)*k, (a20*b05 - a22*b02 + a23*b01)*k,
+            (a10*b10 - a11*b08 + a13*b06)*k, (a01*b08 - a00*b10 - a03*b06)*k,
+            (a30*b04 - a31*b02 + a33*b00)*k, (a21*b02 - a20*b04 - a23*b00)*k,
+            (a11*b07 - a10*b09 - a12*b06)*k, (a00*b09 - a01*b07 + a02*b06)*k,
+            (a31*b01 - a30*b03 - a32*b00)*k, (a20*b03 - a21*b01 + a22*b00)*k];
+  }
+  const xf = (m, v, w = 1) => [0, 1, 2, 3].map(r => m[r]*v[0] + m[4+r]*v[1] + m[8+r]*v[2] + m[12+r]*w);
+  function ndc(vp, p){ const q = xf(vp, p); return [q[0]/q[3], q[1]/q[3], q[2]/q[3], q[3]]; }
+  const corners = b => [0, 1, 2, 3, 4, 5, 6, 7].map(i =>
+    [i&1 ? b[3] : b[0], i&2 ? b[4] : b[1], i&4 ? b[5] : b[2]]);
+  const centre = b => [(b[0]+b[3])/2, (b[1]+b[4])/2, (b[2]+b[5])/2];
+
+  // -- solids: triangles, twelve floats a vertex -----------------------------------------
+  // position 3, normal 3, colour 4 (straight alpha), element id (-1 for none), emission.
+  // Faces wind counter-clockwise seen from outside, so glass can draw its back faces first.
+  const VS = 12;
+  const Geo = () => ({v: []});
+  function tri(G, a, b, c, n, col, id, em){
+    for(const p of [a, b, c]) G.v.push(p[0], p[1], p[2], n[0], n[1], n[2],
+                                       col[0], col[1], col[2], col[3], id, em);
+  }
+  function quad(G, a, b, c, d, n, col, id, em){ tri(G, a, b, c, n, col, id, em); tri(G, a, c, d, n, col, id, em); }
+  function box(G, x0, y0, z0, x1, y1, z1, col, id = -1, em = 0, bottom = false){
+    quad(G, [x0,y0,z1], [x1,y0,z1], [x1,y1,z1], [x0,y1,z1], [0,0,1], col, id, em);
+    quad(G, [x1,y0,z0], [x0,y0,z0], [x0,y1,z0], [x1,y1,z0], [0,0,-1], col, id, em);
+    quad(G, [x1,y0,z1], [x1,y0,z0], [x1,y1,z0], [x1,y1,z1], [1,0,0], col, id, em);
+    quad(G, [x0,y0,z0], [x0,y0,z1], [x0,y1,z1], [x0,y1,z0], [-1,0,0], col, id, em);
+    quad(G, [x0,y1,z1], [x1,y1,z1], [x1,y1,z0], [x0,y1,z0], [0,1,0], col, id, em);
+    if(bottom) quad(G, [x0,y0,z0], [x1,y0,z0], [x1,y0,z1], [x0,y0,z1], [0,-1,0], col, id, em);
+  }
+  /** A round wire through `pts`, one short cylinder per segment. */
+  function tube(G, pts, r, col, id = -1, em = 0, sides = 7){
+    for(let i = 1; i < pts.length; i++){
+      const a = pts[i-1], b = pts[i], t = sub(b, a);
+      if(Math.hypot(t[0], t[1], t[2]) < 1e-6) continue;
+      const tn = norm(t), up = Math.abs(tn[1]) < .9 ? [0, 1, 0] : [1, 0, 0];
+      const u = norm(cross(tn, up)), w = cross(tn, u);
+      const ring = k => { const q = k/sides*2*Math.PI; return add(mul3(u, Math.cos(q)), mul3(w, Math.sin(q))); };
+      for(let k = 0; k < sides; k++){
+        const n0 = ring(k), n1 = ring(k+1);
+        quad(G, add(a, mul3(n0, r)), add(a, mul3(n1, r)), add(b, mul3(n1, r)), add(b, mul3(n0, r)),
+             norm(add(n0, n1)), col, id, em);
+      }
+    }
+  }
+  /** A drum standing on its rim, axis along z, from z0 to z1 -- a slice of it when a1 > a0. */
+  function wedge(G, cx, cy, r, a0, a1, z0, z1, col, id){
+    const n = Math.max(2, Math.ceil((a1 - a0)/(2*Math.PI)*120));
+    const P = (a, z) => [cx + r*Math.cos(a), cy + r*Math.sin(a), z], C = z => [cx, cy, z];
+    for(let j = 0; j < n; j++){
+      const u = a0 + (a1 - a0)*j/n, w = a0 + (a1 - a0)*(j+1)/n;
+      tri(G, C(z1), P(u, z1), P(w, z1), [0, 0, 1], col, id, 0);
+      tri(G, C(z0), P(w, z0), P(u, z0), [0, 0, -1], col, id, 0);
+      quad(G, P(u, z0), P(w, z0), P(w, z1), P(u, z1), [Math.cos((u+w)/2), Math.sin((u+w)/2), 0], col, id, 0);
+    }
+    if(a1 - a0 < 2*Math.PI - 1e-9){                       // the two cut faces
+      quad(G, C(z0), P(a0, z0), P(a0, z1), C(z1), [Math.sin(a0), -Math.cos(a0), 0], col, id, 0);
+      quad(G, C(z1), P(a1, z1), P(a1, z0), C(z0), [-Math.sin(a1), Math.cos(a1), 0], col, id, 0);
+    }
+  }
+  /** A round plinth: a drum on its base, axis along y. */
+  function disc(G, cx, cz, r, y0, y1, col, segs = 72){
+    for(let j = 0; j < segs; j++){
+      const u = j/segs*2*Math.PI, w = (j+1)/segs*2*Math.PI;
+      const P = (a, y) => [cx + r*Math.sin(a), y, cz + r*Math.cos(a)];
+      tri(G, [cx, y1, cz], P(u, y1), P(w, y1), [0, 1, 0], col, -1, 0);
+      quad(G, P(w, y0), P(u, y0), P(u, y1), P(w, y1), [Math.sin((u+w)/2), 0, Math.cos((u+w)/2)], col, -1, 0);
+    }
+  }
+
+  /** The part of a polyline, x increasing, that lies between x = a and x = b. */
+  function clipX(pts, a = 0, b = 1){
+    const out = [];
+    for(let i = 0; i < pts.length; i++){
+      const p = pts[i], q = pts[i+1];
+      if(p[0] >= a && p[0] <= b) out.push(p);
+      if(!q) break;
+      for(const e of [a, b]){
+        if((p[0] < e && q[0] > e) || (p[0] > e && q[0] < e)){
+          const k = (e - p[0])/(q[0] - p[0]);
+          out.push([e, p[1] + (q[1] - p[1])*k]);
+        }
+      }
+    }
+    return out;
+  }
+  /** A polyline cut into dashes of `on` world units with `off` between, as SVG dashes it. */
+  function dashes(pts, on, off){
+    const out = [];
+    let k = 0, left = on, cur = [pts[0]];
+    for(let i = 1; i < pts.length; i++){
+      let p = pts[i-1].slice();
+      const q = pts[i];
+      let seg = Math.hypot(q[0]-p[0], q[1]-p[1], q[2]-p[2]);
+      while(seg > left){
+        const f = left/seg;
+        p = [p[0] + (q[0]-p[0])*f, p[1] + (q[1]-p[1])*f, p[2] + (q[2]-p[2])*f];
+        seg -= left;
+        if(k%2 === 0){ cur.push(p); out.push(cur); }
+        k++; left = k%2 ? off : on; cur = [p];
+      }
+      left -= seg;
+      if(k%2 === 0) cur.push(q);
+    }
+    if(k%2 === 0 && cur.length > 1) out.push(cur);
+    return out;
+  }
+
+  // -- the exhibits ------------------------------------------------------------------------
+  // Local units: the plinth's top is y = 0 and the reading face looks down +z.  Both time
+  // charts are the same width, so a moment sits at the same x in each, as it does on the
+  // page: PW on a landscape screen, and half that on a portrait one, where the page's own
+  // charts also keep their height and give up width.
+  const PW = 16, WIN_H = 5.4, DAY_H = 4.2, FIN = .5, BLK = 1;
+  const plotWidth = asp => asp >= .8 ? PW : PW/2, N3PW = PW;
+  const TIP_Y = .78, HEAD_Y = 1.75;           // over a time chart: the hover's answer, the title
+  const PIE_R = 2.5, PIE_T = .5, PIE_LIFT = .7;
+
+  /** A word to be drawn: `h` is its em in world units, (x, y) its baseline point. */
+  const word = (s, h, x, y, z, o = {}) => Object.assign({s: String(s), h, x, y, z, al: 'l',
+                                                         c: '--fg', a: 1, f: 'sans', ext: 0, id: -1}, o);
+
+  function extent(W, measure){                            // the box the words take up
+    let b = null;
+    for(const w of W){
+      const tw = measure(w.s, w.f, w.h);
+      const x0 = w.al === 'c' ? w.x - tw/2 : w.al === 'r' ? w.x - tw : w.x;
+      const q = [x0, w.y - w.h*.3, w.z - (w.ext||0), x0 + tw, w.y + w.h*.9, w.z];
+      b = b ? [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.min(b[2], q[2]),
+               Math.max(b[3], q[3]), Math.max(b[4], q[4]), Math.max(b[5], q[5])] : q;
+    }
+    return b;
+  }
+  function union(a, b){
+    if(!a) return b; if(!b) return a;
+    return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2]),
+            Math.max(a[3], b[3]), Math.max(a[4], b[4]), Math.max(a[5], b[5])];
+  }
+  /** The stone a time chart stands on, with a gold rule along its top edge; deeper by `rows`
+   *  lines of legend below the dates. */
+  function stone(G, cx, x0, x1, z0, z1, rows = 1){
+    const y0 = -.6 - .35*rows;
+    box(G, x0, y0, z0, x1, 0, z1, cx.col('--n-stone'), -1, 0, true);
+    box(G, x0, -.05, z1, x1, 0, z1 + .02, cx.col('--n-trim'), -1, .55);
+    return [x0, y0, z0, x1, 0, z1 + .02];
+  }
+  /** A legend set into the stone's face under the dates: a swatch and a name for each entry,
+   *  wrapped onto as many lines as the width needs -- never cut short. */
+  function legendLines(items, x0, x1, measure){
+    const out = [];
+    let x = x0, line = 0;
+    for(const g of items){
+      const tw = measure(g.s, 'sans', .26);
+      if(x > x0 && x + .34 + tw > x1){ x = x0; line++; }
+      out.push({g, x, line});
+      x += .34 + tw + .6;
+    }
+    return {out, rows: out.length ? line + 1 : 0};
+  }
+  function legendOn(G, W, cx, lg, z){
+    for(const {g, x, line} of lg.out){
+      const y = -.83 - .35*line;
+      box(G, x, y - .03, z - .02, x + .22, y + .19, z + .04, cx.col(g.c), -1, .35);
+      W.push(word(g.s, .26, x + .34, y, z + .025, {c: '--dim'}));
+    }
+  }
+  /** Date ticks cut into the stone's face: as many as fit without touching. */
+  function ticksOn(W, tk, view, z, measure, pw){
+    let last = -1e9;
+    for(const [t, step] of tk || []){
+      const u = (t - view[0])/(view[1] - view[0]);
+      if(u < -1e-6 || u > 1 + 1e-6) continue;
+      const s = tickLabel(t, step), x = u*pw, tw = measure(s, 'sans', .3);
+      if(x - tw/2 < last + .35) continue;
+      last = x + tw/2;
+      W.push(word(s, .3, x, -.48, z + .025, {al: 'c', c: '--n-trim'}));
+    }
+  }
+  function title(W, s, x, y, z){ W.push(word(s, .46, x, y, z, {f: 'serif', c: '--fg'})); }
+  /** A sentence broken into lines of at most n characters, at spaces. */
+  function wrap(s, n = 46){
+    const out = [];
+    let line = '';
+    for(const w of String(s).split(/\s+/).filter(Boolean)){
+      if(line && line.length + 1 + w.length > n){ out.push(line); line = w; }
+      else line = line ? line + ' ' + w : w;
+    }
+    if(line) out.push(line);
+    return out;
+  }
+
+  /** Chart 1: each weekly window a pane of glass cut to its cumulative curve, standing on
+   *  edge in a row along the time axis; the server's percentage a gold wire strung in front,
+   *  in dashes as on the page; a rod at every reset. */
+  function windows(rec, info, cx){
+    const G = Geo(), W = [], glass = [], hits = [], PW = info.pw || N3PW;
+    const [px, py, pw, ph] = rec.plot, H = WIN_H, zb = -FIN/2 - .45;
+    const at = p => [(p[0] - px)/pw, (py + ph - p[1])/ph];
+    const lg = legendLines([{s: 'cumulative tokens', c: '--uncached'}, {s: 'weekly limit', c: '--warn'}],
+                           0, PW, cx.measure);
+    let bx = stone(G, cx, -2.3, PW + 1.5, -1.5, 1.35, lg.rows);
+    legendOn(G, W, cx, lg, 1.35);
+    for(const f of [0, .25, .5, .75, 1]){
+      if(f) box(G, 0, f*H - .012, zb - .015, PW, f*H + .012, zb + .015, cx.col('--line'), -1, .5);
+      const y = Math.max(.08, f*H - .1);                    // the zero sits on the stone, not in it
+      W.push(word(big(Math.round(info.vmax*f)), .3, -.3, y, zb, {al: 'r', c: '--dim'}));
+      W.push(word(Math.round(100*f) + '%', .3, PW + .3, y, zb, {c: '--warn'}));
+    }
+    let lastLbl = -1e9;
+    for(const m of rec.list){
+      const pts = clipX(m.pts.map(at));
+      if(pts.length < 2) continue;
+      if(m.t === 'area'){
+        const V = Geo(), c = cx.col('--uncached', .3), z0 = -FIN/2, z1 = FIN/2;
+        for(let i = 1; i < pts.length; i++){
+          const [xa, ya] = [pts[i-1][0]*PW, pts[i-1][1]*H], [xb, yb] = [pts[i][0]*PW, pts[i][1]*H];
+          if(xb - xa < 1e-6) continue;
+          quad(V, [xa,0,z1], [xb,0,z1], [xb,yb,z1], [xa,ya,z1], [0,0,1], c, m.win, 0);
+          quad(V, [xb,0,z0], [xa,0,z0], [xa,ya,z0], [xb,yb,z0], [0,0,-1], c, m.win, 0);
+          quad(V, [xa,ya,z1], [xb,yb,z1], [xb,yb,z0], [xa,ya,z0], norm([ya - yb, xb - xa, 0]), c, m.win, 0);
+        }
+        const l = pts[pts.length-1], f0 = pts[0];
+        if(l[1] > 1e-4) quad(V, [l[0]*PW,0,z1], [l[0]*PW,0,z0], [l[0]*PW,l[1]*H,z0], [l[0]*PW,l[1]*H,z1], [1,0,0], c, m.win, 0);
+        if(f0[1] > 1e-4) quad(V, [f0[0]*PW,0,z0], [f0[0]*PW,0,z1], [f0[0]*PW,f0[1]*H,z1], [f0[0]*PW,f0[1]*H,z0], [-1,0,0], c, m.win, 0);
+        glass.push({v: V.v, id: m.win, c: [(f0[0] + l[0])/2*PW, H/3, 0]});
+        hits.push({id: m.win, box: [f0[0]*PW, 0, -FIN/2 - .3, l[0]*PW, H, FIN/2 + .5]});
+        // The reset: a rod where the window opened, and its date where there is room.
+        const raw = at(m.pts[0]);
+        if(raw[0] >= 0 && raw[0] <= 1){
+          box(G, raw[0]*PW - .02, 0, zb - .02, raw[0]*PW + .02, H + .1, zb + .02, cx.col('--dim'), -1, .4);
+          const w = (info.wins || [])[m.win], t0 = w && (w.reset_at != null ? w.reset_at
+                     : (w.cum_points && w.cum_points.length ? w.cum_points[0][0] : null));
+          if(t0 != null && raw[0]*PW - lastLbl >= 1.6){
+            lastLbl = raw[0]*PW;
+            W.push(word(day(t0), .26, raw[0]*PW + .08, H + .2, zb, {c: '--dim'}));
+          }
+        }
+      } else if(m.t === 'line' && !m.dash){                     // the curve: a lit edge
+        tube(G, pts.map(p => [p[0]*PW, p[1]*H, 0]), .05, cx.col('--uncached'), m.win, .85);
+      } else if(m.t === 'line'){                               // the percentage: gold beads
+        const zf = FIN/2 + .32;
+        for(const run of dashes(pts.map(p => [p[0]*PW, p[1]*H, zf]), .2, .12))
+          tube(G, run, .05, cx.col('--warn'), m.win, .7);
+      }
+    }
+    title(W, info.title, -2.1, H + HEAD_Y, zb);
+    ticksOn(W, info.tk, info.view, 1.35, cx.measure, PW);
+    bx = union(union(bx, [-2.3, 0, -1.5, PW + 1.5, H + HEAD_Y + .5, 1.35]), extent(W, cx.measure));
+    return {solid: G.v, glass, words: W, box: bx, hits, plot: {w: PW, h: H, z: 0}};
+  }
+
+  /** Chart 2: a skyline -- one block a model a day, stacked, with a sliver of night between. */
+  function daily(rec, info, cx){
+    const G = Geo(), W = [], hits = [], PW = info.pw || N3PW;
+    const [px, py, pw, ph] = rec.plot, H = DAY_H;
+    const lg = legendLines(info.legend || [], 0, PW + .9, cx.measure);
+    let bx = stone(G, cx, -1.2, PW + 1.2, -1.2, 1.2, lg.rows);
+    legendOn(G, W, cx, lg, 1.2);
+    const cols = new Map();
+    for(const m of rec.list){
+      if(m.t !== 'rect') continue;
+      const u0 = Math.max(0, (m.x - px)/pw), u1 = Math.min(1, (m.x + m.w - px)/pw);
+      if(u1 - u0 < 1e-5) continue;
+      const v1 = (py + ph - m.y)/ph, v0 = (py + ph - m.y - m.h)/ph;
+      if(!cols.has(m.day)) cols.set(m.day, cols.size);
+      const id = cols.get(m.day), gap = Math.min(.018, (v1 - v0)*H/4);
+      box(G, u0*PW, v0*H + gap, -BLK/2, u1*PW, v1*H - gap, BLK/2, cx.col(m.c), id);
+      const h = hits.find(q => q.id === id);
+      if(h) h.box[4] = Math.max(h.box[4], v1*H);
+      else hits.push({id, day: m.day, box: [u0*PW, 0, -BLK/2, u1*PW, v1*H, BLK/2]});
+    }
+    for(const h of hits) h.box[4] = Math.max(h.box[4], .6);   // an idle day is still a target
+    title(W, info.title, -1, H + HEAD_Y, 0);
+    if(info.peak) W.push(word(info.peak, .28, 0, H + .25, 0, {c: '--dim'}));
+    ticksOn(W, info.tk, info.view, 1.2, cx.measure, PW);
+    bx = union(union(bx, [-1.2, 0, -1.2, PW + 1.2, H + HEAD_Y + .5, 1.2]), extent(W, cx.measure));
+    return {solid: G.v, glass: [], words: W, box: bx, hits, plot: {w: PW, h: H, z: 0}};
+  }
+
+  /** Charts 3 and 4: a medallion standing over a round plinth, cut into its slices, with
+   *  its legend beside it.  Every slice is the same thickness: the angle is the only measure. */
+  function medal(rec, info, cx){
+    const G = Geo(), W = [], R = PIE_R, cy = R + PIE_LIFT;
+    disc(G, 0, 0, R*.62, -.8, 0, cx.col('--n-stone'));
+    disc(G, 0, 0, R*.62 + .02, -.05, .012, cx.col('--n-trim'));
+    const sl = rec && rec.list[0] ? rec.list[0].slices : [];
+    let a = Math.PI/2;                                    // twelve o'clock, then clockwise
+    const arcs = [];
+    sl.forEach(([f, c], i) => {
+      if(!(f > 1e-6)) return;
+      const b = a - f*2*Math.PI, mid = (a + b)/2, on = i === info.hot;
+      const k = f >= 1 - 1e-9 ? 0 : (on ? .3 : .045);
+      const ox = Math.cos(mid)*k, oy = Math.sin(mid)*k, oz = on ? .18 : 0;
+      wedge(G, ox, cy + oy, R, b, a, -PIE_T/2 + oz, PIE_T/2 + oz, cx.col(c), i);
+      arcs.push([i, b, a]);
+      a = b;
+    });
+    if(!arcs.length){                                     // nothing in range: a hollow ring
+      tube(G, Array.from({length: 73}, (_, j) => [Math.cos(j/72*2*Math.PI)*R, cy + Math.sin(j/72*2*Math.PI)*R, 0]),
+           .04, cx.col('--line'), -1, .5);
+    }
+    // The legend: the total first, then one line a slice, each with its swatch.
+    const lx = R + 1.1, lh = .5, lg = info.legend || {rows: []};
+    const n = lg.rows.length + 1;
+    let y = cy + (n - 1)*lh/2;
+    if(lg.head) W.push(word(lg.head, .34, lx, y, 0, {c: '--fg', w: 600}));
+    for(const r of lg.rows){
+      y -= lh;
+      box(G, lx, y - .02, -.1, lx + .24, y + .22, .1, cx.col(r.c), r.i, .3);
+      W.push(word(r.s, .3, lx + .4, y, 0, {c: '--dim', id: r.i}));
+    }
+    if(lg.empty) wrap(lg.empty).forEach((l, k, a) =>
+      W.push(word(l, .3, lx, cy + ((a.length - 1)/2 - k)*.46, 0, {c: '--dim'})));
+    title(W, info.title, -R, 2*R + PIE_LIFT + .75, 0);
+    const bx = union([-R - .4, -.8, -R*.62, R + .6, 2*R + PIE_LIFT + .3, R*.62], extent(W, cx.measure));
+    return {solid: G.v, glass: [], words: W, box: bx, hits: [], arcs, plot: null,
+            medal: {cy, r: R}};
+  }
+
+  /** The headline numbers, afloat over a low slab: the masthead, then the tiles, three a row. */
+  function ledger(info, cx){
+    const G = Geo(), W = [];
+    const n = info.tiles.length, cols = 3, rows = Math.ceil(n/cols), cw = 4.9;
+    const x0 = -cols*cw/2, top = rows*2.25 + 1.05;          // the notes clear the far shore
+    W.push(word(info.kicker, .36, x0, top + 2.45, 0, {f: 'serif', c: '--dim'}));
+    W.push(word(info.title, 1.15, x0 - .05, top + 1.1, 0, {f: 'serif', c: '--fg', ext: .22}));
+    W.push(word(info.dek, .34, x0, top + .38, 0, {c: '--dim'}));
+    info.tiles.forEach((t, i) => {
+      const x = x0 + (i % cols)*cw, y = top - .6 - Math.floor(i/cols)*2.25;
+      W.push(word(t.k.toUpperCase(), .26, x, y, 0, {c: '--dim', f: 'caps'}));
+      W.push(word(t.v, .86, x - .03, y - 1.0, 0, {c: i ? '--fg' : '--warn', ext: .14, w: 300}));
+      if(t.n) W.push(word(t.n, .3, x, y - 1.5, 0, {c: '--dim'}));
+    });
+    box(G, x0 - .6, -.6, -1.1, -x0 + .6, 0, 1.1, cx.col('--n-stone'), -1, 0, true);
+    box(G, x0 - .6, -.05, 1.1, -x0 + .6, 0, 1.12, cx.col('--n-trim'), -1, .55);
+    if(info.brand) W.push(word(info.brand, .26, 0, -.4, 1.13, {al: 'c', c: '--n-trim', f: 'serif'}));
+    const bx = union([x0 - .6, -.6, -1.1, -x0 + .6, 0, 1.12], extent(W, cx.measure));
+    return {solid: G.v, glass: [], words: W, box: bx, hits: [], plot: null};
+  }
+
+  /** Nothing to draw: a stone as wide as its words, the title, and the page's own reason. */
+  function empty(msg, info, cx){
+    const G = Geo(), W = [], lines = wrap(msg);
+    title(W, info.title, 0, .75 + lines.length*.48 + .5, 0);
+    lines.forEach((l, k) => W.push(word(l, .32, 0, .75 + (lines.length - 1 - k)*.48, 0, {c: '--dim'})));
+    const w = extent(W, cx.measure)[3];
+    const bx0 = stone(G, cx, -.8, w + .8, -1.2, 1.2);
+    return {solid: G.v, glass: [], words: W, box: union(bx0, extent(W, cx.measure)), hits: [], plot: null};
+  }
+
+  /** The style switch's dot as a coin: its face, the white ring round it, and a hairline --
+   *  the proportions of the dot on the page (18px, a 3px ring, a 1px line), radius 1. */
+  function coin(face, ring, line){
+    const G = Geo();
+    wedge(G, 0, 0, 1.44, 0, 2*Math.PI, -.14, .06, line, -1);
+    wedge(G, 0, 0, 1.33, 0, 2*Math.PI, -.12, .1, ring, -1);
+    wedge(G, 0, 0, 1, 0, 2*Math.PI, -.1, .16, face, -1);
+    return G.v;
+  }
+
+  // -- where everything stands ------------------------------------------------------------
+  // The camera does not fly: it stands on the bank at about the height of an exhibit's middle,
+  // and the exhibits come to it.  The one in front hovers over the water, as close as it can
+  // come while it stays on screen and under the sky's row, so the water below it holds its
+  // whole reflection; the others hang in the sky, in a row -- or in two, on a narrow screen.
+  const CAM = {eye: [0, 1.45, 27], at: [0, 3.2, 0]}, FLOAT = .6, SKY_Z = -46;
+  function fovFor(asp){
+    const f = 40*Math.PI/180;                             // vertical, on a landscape screen
+    const hf = 2*Math.atan(Math.tan(f/2)*asp);
+    return hf >= 56*Math.PI/180 ? f : Math.min(1.45, 2*Math.atan(Math.tan(28*Math.PI/180)/asp));
+  }
+  function camera(asp, orb){
+    const fov = fovFor(asp), o = orb || {yaw: 0, pitch: 0, dolly: 1, pivot: CAM.at};
+    const pv = o.pivot || CAM.at;
+    const rot = v => {                                    // turn about the pivot: tilt, then swing
+      let [x, y, z] = sub(v, pv);
+      const cp = Math.cos(o.pitch || 0), sp = Math.sin(o.pitch || 0);
+      [y, z] = [y*cp + z*sp, -y*sp + z*cp];
+      const cy = Math.cos(o.yaw || 0), sy = Math.sin(o.yaw || 0);
+      [x, z] = [x*cy + z*sy, -x*sy + z*cy];
+      return add(pv, [x, y, z]);
+    };
+    const at = rot(CAM.at);
+    let eye = rot(CAM.eye);
+    eye = add(at, mul3(sub(eye, at), o.dolly || 1));
+    const V = look(eye, at), P = persp(fov, asp, .5, 900);
+    return {eye, at, V, P, VP: mul(P, V), fov, asp};
+  }
+  /** Where the horizon crosses the screen, in NDC y. */
+  const horizon = cam => ndc(cam.VP, [cam.eye[0], cam.eye[1], cam.eye[2] - 5000])[1];
+
+  function fits(M, box, vp, x0, x1, y0, y1){
+    for(const c of corners(box)){
+      const q = ndc(vp, xf(M, c));
+      if(q[3] <= .5 || q[0] < x0 || q[0] > x1 || q[1] < y0 || q[1] > y1) return false;
+    }
+    return true;
+  }
+  /** The front of the stage: squarely facing the camera, resting FLOAT above the water, and as
+   *  near as the box allows while it stays on screen and under the sky's row (FORE_TOP). */
+  const FORE_TOP = .46;
+  function fore(box, cam){
+    const c = centre(box), top = FORE_TOP;
+    const y = FLOAT + (c[1] - box[1]);
+    let lo = -400, hi = cam.eye[2] - 2;
+    for(let i = 0; i < 48; i++){
+      const z = (lo + hi)/2;
+      if(fits(pose([0, y, z], 0, 0, 0, 1, c), box, cam.VP, -.93, .93, -.9, top)) lo = z; else hi = z;
+    }
+    return {p: [0, y, lo], yaw: 0, pitch: 0, roll: 0, s: 1, lit: 1};
+  }
+  /** The sky slots, as NDC cells above the horizon, and the world point at each one's centre. */
+  function slots(n, cam){
+    if(n <= 0) return [];
+    const y0 = FORE_TOP + .09, y1 = .95;
+    const cols = cam.asp >= 1.15 ? n : Math.min(n, 2), rows = Math.ceil(n/cols);
+    const IV = inv(cam.VP), out = [];
+    for(let i = 0; i < n; i++){
+      const r = Math.floor(i/cols), inRow = Math.min(cols, n - r*cols), c = i - r*cols;
+      const cw = 1.84/cols, ch = (y1 - y0)/rows;
+      const x = -inRow*cw/2 + (c + .5)*cw, y = y1 - (r + .5)*ch;
+      const a = xf(IV, [x, y, -1]), b = xf(IV, [x, y, 1]);
+      const pa = mul3(a, 1/a[3]), pb = mul3(b, 1/b[3]);
+      const k = (SKY_Z - pa[2])/(pb[2] - pa[2]);
+      out.push({p: add(pa, mul3(sub(pb, pa), k)), cw, ch, ndc: [x, y]});
+    }
+    return out;
+  }
+  function skyPose(box, slot, cam){
+    const c = centre(box), p = slot.p, d = sub(cam.eye, p);
+    const yaw = Math.atan2(d[0], d[2]), pitch = Math.atan2(-d[1], Math.hypot(d[0], d[2]))*.8;
+    let s = 1;
+    for(let i = 0; i < 3; i++){                            // near enough linear this far out
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      const M = pose(p, yaw, pitch, 0, s, c);
+      for(const q of corners(box)){
+        const v = ndc(cam.VP, xf(M, q));
+        x0 = Math.min(x0, v[0]); x1 = Math.max(x1, v[0]); y0 = Math.min(y0, v[1]); y1 = Math.max(y1, v[1]);
+      }
+      s *= Math.min(slot.cw*.8/(x1 - x0), slot.ch*.66/(y1 - y0));
+    }
+    return {p, yaw, pitch, roll: 0, s, lit: .62};
+  }
+
+  /** A pose between two, at k in [0, 1].  An exhibit coming down falls like a leaf, swinging
+   *  side to side as it drops; one going up rises like a lantern let go, drifting wide of it. */
+  function tween(a, b, k, kind){
+    const e = k < .5 ? 4*k*k*k : 1 - Math.pow(-2*k + 2, 3)/2;
+    const o = {p: [0, 1, 2].map(i => lerp(a.p[i], b.p[i], e)),
+               yaw: lerp(a.yaw, b.yaw, e), pitch: lerp(a.pitch, b.pitch, e),
+               roll: lerp(a.roll || 0, b.roll || 0, e), s: lerp(a.s, b.s, e),
+               lit: lerp(a.lit, b.lit, e)};
+    const span = Math.hypot(b.p[0] - a.p[0], b.p[1] - a.p[1], b.p[2] - a.p[2]);
+    if(kind === 'down'){
+      const sw = Math.sin(3*Math.PI*e)*(1 - e);
+      o.p[0] += sw*Math.min(4, span*.1);
+      o.roll += sw*.32;
+      o.yaw += sw*.25;
+    } else if(kind === 'up'){
+      const arc = Math.sin(Math.PI*e);
+      o.p[0] += arc*Math.min(7, span*.16)*(b.p[0] >= 0 ? -1 : 1);
+      o.p[2] -= arc*Math.min(8, span*.18);
+      o.roll -= arc*.12;
+    }
+    return o;
+  }
+
+  // -- what the pointer touches -------------------------------------------------------------
+  function rayBox(o, d, b){
+    let t0 = -1e9, t1 = 1e9;
+    for(let i = 0; i < 3; i++){
+      if(Math.abs(d[i]) < 1e-12){ if(o[i] < b[i] || o[i] > b[i+3]) return null; continue; }
+      let a = (b[i] - o[i])/d[i], c = (b[i+3] - o[i])/d[i];
+      if(a > c) [a, c] = [c, a];
+      t0 = Math.max(t0, a); t1 = Math.min(t1, c);
+      if(t0 > t1) return null;
+    }
+    return t1 < 0 ? null : Math.max(t0, 0);
+  }
+  /** The ray in an exhibit's own units.  The parameter t is the same in both. */
+  function local(Mi, o, d){ return [xf(Mi, o).slice(0, 3), xf(Mi, d, 0).slice(0, 3)]; }
+  /** Where the ray crosses the plane z = zp, in local units. */
+  function onPlane(o, d, zp){
+    if(Math.abs(d[2]) < 1e-9) return null;
+    const t = (zp - o[2])/d[2];
+    return t < 0 ? null : [o[0] + d[0]*t, o[1] + d[1]*t, t];
+  }
+  /** The slice under local point (x, y) on a medallion's face, or -1. */
+  function sliceAt(x, y, m){
+    const dx = x, dy = y - m.medal.cy;
+    if(Math.hypot(dx, dy) > m.medal.r + .35) return -1;
+    let a = Math.atan2(dy, dx);
+    for(const [i, lo, hi] of m.arcs){
+      for(const k of [-1, 0, 1]) if(a + k*2*Math.PI >= lo && a + k*2*Math.PI <= hi) return i;
+    }
+    return -1;
+  }
+
+  return {mul, persp, look, pose, inv, xf, ndc, corners, centre, VS,
+          windows, daily, medal, ledger, empty, coin, plotWidth, wrap, fore, slots, skyPose, tween, camera, horizon,
+          fovFor, rayBox, local, onPlane, sliceAt, clipX, dashes, PW, WIN_H, DAY_H, CAM, FLOAT, FORE_TOP,
+          TIP_Y};
+})();
+
+// ---- the scene, in WebGL2 -------------------------------------------------------------------
+const S3D = (()=>{
+  if(typeof document === 'undefined' || !document.createElement || !document.querySelector
+     || typeof WebGL2RenderingContext === 'undefined') return null;
+  const RT = document.documentElement;
+  let cv = null, gl = null, ok = true, on = false, raf = 0, need = true, laid = false;
+  let PR = null, pal = {}, serif = 'Georgia,serif', T0 = performance.now();
+  let cam = null, base = null, wpx = 0, hpx = 0, dpr = 1;
+  let F = 0, hov = null, hint = 1;
+  const EX = [], RIP = [], words = new Map();
+  const orb = {yaw: 0, pitch: 0, dolly: 1, gy: 0, gp: 0, gd: 1};
+
+  // -- colour: the style's own variables, as the WebGL layer reads them ---------------------
+  function parse(v){
+    let m = /^#([0-9a-f]{3,8})$/i.exec(v);
+    if(m){
+      let h = m[1];
+      if(h.length < 5) h = h.split('').map(c=>c+c).join('');
+      const n = i => parseInt(h.slice(i, i+2), 16)/255;
+      return [n(0), n(2), n(4), h.length >= 8 ? n(6) : 1];
+    }
+    m = /rgba?\(([^)]+)\)/.exec(v);
+    if(m){
+      const p = m[1].split(/[\s,\/]+/).filter(Boolean).map(parseFloat);
+      return [p[0]/255, p[1]/255, p[2]/255, p.length > 3 ? p[3] : 1];
+    }
+    return [.5, .5, .5, 1];
+  }
+  function col(name, a = 1){
+    if(!(name in pal)) pal[name] = parse(getComputedStyle(RT).getPropertyValue(name).trim());
+    const c = pal[name];
+    return [c[0], c[1], c[2], c[3]*a];
+  }
+  const lin = (name, k = 1) => col(name).slice(0, 3).map(v => Math.pow(v, 2.2)*k);
+
+  // -- words: each string drawn once into a texture, white, and tinted as it is placed -------
+  const pad = document.createElement('canvas'), pctx = pad.getContext('2d');
+  const RASTER = h => h >= .7 ? 150 : 84;
+  function font(f, w, px){
+    if(f === 'serif') return `italic 400 ${px}px ${serif}`;
+    return `${f === 'caps' ? 600 : (w || 400)} ${px}px system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif`;
+  }
+  function spacing(f){ return f === 'caps' ? .14 : 0; }
+  function textW(s, f, w, px){
+    pctx.font = font(f, w, px);
+    return pctx.measureText(s).width + spacing(f)*px*Math.max(0, s.length - 1);
+  }
+  const mwidth = (s, f, h, w) => textW(String(s), f, w, RASTER(h))/RASTER(h)*h;
+  function tex(wd){
+    const px = RASTER(wd.h), key = `${wd.f}|${wd.w||''}|${px}|${wd.s}`;
+    let t = words.get(key);
+    if(t) return t;
+    if(words.size > 700){ for(const v of words.values()) gl.deleteTexture(v.tex); words.clear(); }
+    const tw = textW(wd.s, wd.f, wd.w, px), padx = Math.ceil(px*.2);
+    const W = Math.max(2, Math.ceil(tw) + 2*padx), H = Math.ceil(px*1.4);
+    pad.width = W; pad.height = H;
+    pctx.clearRect(0, 0, W, H);
+    pctx.font = font(wd.f, wd.w, px);
+    pctx.fillStyle = '#fff';
+    pctx.textBaseline = 'alphabetic';
+    const sp = spacing(wd.f)*px;
+    if(sp){
+      let x = padx;
+      for(const ch of wd.s){ pctx.fillText(ch, x, px*1.05); x += pctx.measureText(ch).width + sp; }
+    } else pctx.fillText(wd.s, padx, px*1.05);
+    const g = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, g);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pad);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    t = {tex: g, qw: W/px, qh: H/px, tw: tw/px, pad: padx/px, base: (H - px*1.05)/px};
+    words.set(key, t);
+    return t;
+  }
+
+  // -- programs ---------------------------------------------------------------------------------
+  const FOG = `uniform vec3 u_eye, u_fog; uniform float u_fogk;
+vec3 fogged(vec3 c, vec3 w){ return mix(c, u_fog, 1. - exp(-max(0., length(w - u_eye) - 30.)*u_fogk)); }`;
+  const MESH_VS = `#version 300 es
+in vec3 a_p; in vec3 a_n; in vec4 a_c; in vec2 a_x;
+uniform mat4 u_vp, u_m; uniform float u_mir;
+out vec3 v_w, v_n, v_l; out vec4 v_c; out vec2 v_x;
+void main(){
+  vec4 w = u_m*vec4(a_p, 1.);
+  vec3 n = mat3(u_m)*a_n;
+  if(u_mir > .5){ w.y = -w.y; n.y = -n.y; }
+  v_w = w.xyz; v_n = n; v_l = a_p; v_c = a_c; v_x = a_x;
+  gl_Position = u_vp*w;
+}`;
+  // Lit in linear light: a warm lamp from the bank behind the viewer, the sky's blue from above
+  // and the water's dark from below, a cool rim where a face turns away.  A face squarely in
+  // front reads at its own colour.  Glass takes its opacity from the angle it is seen at.
+  const MESH_FS = `#version 300 es
+precision highp float;
+in vec3 v_w, v_n, v_l; in vec4 v_c; in vec2 v_x;
+uniform vec3 u_key, u_lamp, u_sky, u_gnd, u_rim;
+uniform float u_lit, u_hi, u_glass, u_mir, u_ao, u_a;
+${FOG}
+out vec4 o;
+void main(){
+  vec3 N = normalize(v_n), V = normalize(u_eye - v_w);
+  if(u_glass > .5 && (u_mir > .5 ? gl_FrontFacing : !gl_FrontFacing)) N = -N;
+  vec3 A = pow(v_c.rgb, vec3(2.2));
+  float hi = (u_hi > -.5 && abs(v_x.x - u_hi) < .5) ? 1. : 0.;
+  float nl = max(dot(N, u_key), 0.);
+  vec3 amb = mix(u_gnd, u_sky, N.y*.5 + .5);
+  float sp = pow(max(dot(N, normalize(u_key + V)), 0.), 60.);
+  float fr = pow(1. - abs(dot(N, V)), 4.);
+  float ao = (u_ao > .5 && v_l.y > -.001) ? mix(.55, 1., smoothstep(0., 1.2, v_l.y)) : 1.;
+  vec3 c = A*(amb + u_lamp*nl)*ao + u_lamp*sp*(.1 + .9*u_glass) + u_rim*fr*.45;
+  c = mix(c, A*1.3 + .03, v_x.y);
+  c = c*u_lit + A*hi*.45;
+  c = fogged(pow(c, vec3(1./2.2)), v_w);
+  float a = v_c.a*u_a;
+  if(u_glass > .5) a = min(.9, a + fr*.45 + sp*.5 + hi*.2);
+  if(u_mir > .5) a *= exp(v_w.y*.035);
+  o = vec4(c*a, a);
+}`;
+  const TEXT_VS = `#version 300 es
+in vec2 a_q;
+uniform mat4 u_vp, u_m; uniform vec3 u_o; uniform vec2 u_sz; uniform float u_mir;
+out vec2 v_uv; out vec3 v_w;
+void main(){
+  vec4 w = u_m*vec4(u_o + vec3(a_q*u_sz, 0.), 1.);
+  if(u_mir > .5) w.y = -w.y;
+  v_uv = vec2(a_q.x, 1. - a_q.y); v_w = w.xyz;
+  gl_Position = u_vp*w;
+}`;
+  const TEXT_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv; in vec3 v_w;
+uniform sampler2D u_tex; uniform vec4 u_c; uniform float u_mir;
+${FOG}
+out vec4 o;
+void main(){
+  float a = texture(u_tex, v_uv).a*u_c.a;
+  if(u_mir > .5) a *= exp(v_w.y*.035);
+  o = vec4(fogged(u_c.rgb, v_w)*a, a);
+}`;
+  const FULL_VS = `#version 300 es
+out vec2 v_p;
+void main(){
+  vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2))*2. - 1.;
+  v_p = p; gl_Position = vec4(p, 1., 1.);
+}`;
+  // The sky: night blue over a band of river mist, and the far shore -- a low dark line with
+  // gas lamps along it -- which the water doubles.
+  const SKY_FS = `#version 300 es
+precision highp float;
+in vec2 v_p;
+uniform mat4 u_ivp; uniform vec3 u_eye, u_zen, u_sky, u_haze, u_shore, u_lamp; uniform float u_t, u_mir;
+out vec4 o;
+float h1(float x){ return fract(sin(x*127.1)*43758.5453); }
+void main(){
+  vec4 f = u_ivp*vec4(v_p, 1., 1.);
+  vec3 d = normalize(f.xyz/f.w - u_eye);
+  if(u_mir > .5) d.y = -d.y;
+  float e = d.y;
+  vec3 c = mix(u_haze, u_sky, smoothstep(0., .2, e));
+  c = mix(c, u_zen, smoothstep(.16, .8, e));
+  c += u_haze*.5*exp(-abs(e)*60.);
+  float az = atan(d.x, -d.z);
+  float sh = .0045 + .0075*(.5 + .5*sin(az*4.3 + 1.3))*(.7 + .3*sin(az*15.1)) + .0015*sin(az*47.);
+  float land = smoothstep(sh + .0006, sh - .0006, e)*step(-.002, e);
+  c = mix(c, u_shore, land*.72);
+  float k = az*80., id = floor(k);
+  if(h1(id) > .55){
+    float ax = (id + .5 + (h1(id + 3.) - .5)*.7)/80., ay = sh*(.2 + .6*h1(id + 9.));
+    vec2 q = vec2(az - ax, e - ay);
+    float g = exp(-dot(q, q)/2.4e-6) + .3*exp(-dot(q, q)/3.e-5);
+    c += u_lamp*g*(.75 + .25*sin(u_t*(.7 + 1.6*h1(id + 5.)) + id))*step(-.0015, e);
+  }
+  float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)))*43758.5453);
+  o = vec4(c + (n - .5)/255., 1.);
+}`;
+  const WATER_VS = `#version 300 es
+in vec2 a_q; uniform mat4 u_vp; out vec3 v_w;
+void main(){ v_w = vec3(a_q.x, 0., a_q.y); gl_Position = u_vp*vec4(v_w, 1.); }`;
+  // Still water: the scene mirrored in it, wavering with a slow swell and with the rings an
+  // exhibit sets going where it comes down; darker where you look into it, brighter at a
+  // glance, and lost in the mist toward the far shore.
+  const WATER_FS = `#version 300 es
+precision highp float;
+in vec3 v_w;
+uniform sampler2D u_ref; uniform vec2 u_res; uniform vec3 u_water, u_lamp, u_pool;
+uniform float u_t; uniform vec4 u_rip[4];
+${FOG}
+out vec4 o;
+void main(){
+  vec2 xz = v_w.xz;
+  vec2 g = vec2(.8, .3)*sin(dot(xz, vec2(.8, .3))*1.1 + u_t*.7)*.5
+         + vec2(-.3, .95)*sin(dot(xz, vec2(-.3, .95))*1.9 + u_t*1.05)*.3
+         + vec2(.6, -.8)*sin(dot(xz, vec2(.6, -.8))*3.1 + u_t*1.5)*.2;
+  g *= .012;
+  for(int i = 0; i < 4; i++){
+    vec4 r = u_rip[i];
+    float age = u_t - r.z;
+    if(r.w <= 0. || age < 0. || age > 8.) continue;
+    vec2 q = xz - r.xy;
+    float L = length(q) + 1e-4, x = L - age*3.4;
+    g += q/L*sin(x*2.6)*exp(-x*x*.22)*exp(-age*.5)*r.w*.05;
+  }
+  float dist = length(v_w - u_eye);
+  vec2 uv = gl_FragCoord.xy/u_res, off = vec2(g.x*.5, g.y*1.6)*14./(10. + dist);
+  vec3 r = texture(u_ref, uv + off).rgb*.5 + texture(u_ref, uv + off*1.7 + vec2(0., .0025)).rgb*.25
+         + texture(u_ref, uv + off*.4 - vec2(0., .0025)).rgb*.25;
+  vec3 V = normalize(u_eye - v_w);
+  float fr = pow(1. - max(V.y, 0.), 5.);
+  vec3 c = mix(u_water, r, mix(.55, .95, fr));
+  vec2 pq = xz - u_pool.xy;
+  c += u_lamp*u_pool.z*.05*exp(-dot(pq, pq)/60.);
+  o = vec4(fogged(c, v_w), 1.);
+}`;
+  // The Falling Rocket: gold sparks drifting down the dark, well behind the one in front.
+  const SPARK_VS = `#version 300 es
+in vec4 a_s;
+uniform mat4 u_vp; uniform float u_t, u_mir, u_ps;
+out float v_a;
+void main(){
+  float top = 34., y = mod(a_s.y - u_t*a_s.w, top);
+  vec3 p = vec3(a_s.x + sin(u_t*.21 + a_s.z)*1.3, y + .1, a_s.z + cos(u_t*.17 + a_s.x)*.9);
+  if(u_mir > .5) p.y = -p.y;
+  vec4 c = u_vp*vec4(p, 1.);
+  gl_Position = c;
+  float tw = .55 + .45*sin(u_t*(1.5 + fract(a_s.x*7.3)*3.) + a_s.z*5.);
+  v_a = tw*smoothstep(0., 2., y)*smoothstep(top, top - 5., y)*(u_mir > .5 ? .6 : 1.);
+  gl_PointSize = clamp(u_ps/c.w, 1., 5.);
+}`;
+  const SPARK_FS = `#version 300 es
+precision highp float;
+in float v_a; uniform vec3 u_c; out vec4 o;
+void main(){
+  vec2 q = gl_PointCoord*2. - 1.;
+  float a = exp(-dot(q, q)*3.5)*v_a;
+  o = vec4(u_c*a, a);
+}`;
+
+  function program(vs, fs){
+    const sh = (type, src)=>{
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src); gl.compileShader(s);
+      if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for(let i = 0; i < n; i++){
+      const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, '');
+      u[nm] = gl.getUniformLocation(p, nm);
+    }
+    return {p, u};
+  }
+
+  function mesh(v){                                       // a vertex array, ready to draw
+    const vao = gl.createVertexArray(), buf = gl.createBuffer();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW);
+    const st = N3.VS*4, pr = PR.mesh.p;
+    [['a_p', 3, 0], ['a_n', 3, 12], ['a_c', 4, 24], ['a_x', 2, 40]].forEach(([nm, k, off])=>{
+      const l = gl.getAttribLocation(pr, nm);
+      if(l < 0) return;
+      gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, k, gl.FLOAT, false, st, off);
+    });
+    gl.bindVertexArray(null);
+    return {vao, buf, n: v.length/N3.VS};
+  }
+  function drop(m){ if(m){ gl.deleteVertexArray(m.vao); gl.deleteBuffer(m.buf); } }
+
+  function init(){
+    cv = document.createElement('canvas');
+    cv.className = 's3d';
+    cv.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(cv);
+    gl = cv.getContext('webgl2', {antialias: true, alpha: false, depth: true, stencil: false,
+                                  premultipliedAlpha: true, powerPreference: 'high-performance'});
+    if(!gl){ cv.remove(); cv = null; return false; }
+    cv.addEventListener('webglcontextlost', e=>{ e.preventDefault(); ok = false; sync(); });
+    try{
+      PR = {mesh: program(MESH_VS, MESH_FS), text: program(TEXT_VS, TEXT_FS),
+            sky: program(FULL_VS, SKY_FS), water: program(WATER_VS, WATER_FS),
+            spark: program(SPARK_VS, SPARK_FS)};
+    }catch(e){
+      console.warn('token-counter: the Nocturne scene did not compile\n' + e.message);
+      cv.remove(); cv = null; gl = null; return false;
+    }
+    // a unit quad for words, a sheet for the water, the sparks, and the reflection target
+    const q = (arr, pr, nm, k)=>{
+      const vao = gl.createVertexArray(), b = gl.createBuffer();
+      gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+      const l = gl.getAttribLocation(pr.p, nm);
+      gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, k, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+      return {vao, n: arr.length/k};
+    };
+    PR.quad = q([0,0, 1,0, 1,1, 0,0, 1,1, 0,1], PR.text, 'a_q', 2);
+    const S = 3000;
+    PR.sheet = q([-S,-S, S,-S, S,S, -S,-S, S,S, -S,S], PR.water, 'a_q', 2);
+    let seed = 7;
+    const rnd = () => (seed = (seed*16807) % 2147483647)/2147483647;
+    const sp = [];
+    for(let i = 0; i < 340; i++) sp.push((rnd() - .5)*150, rnd()*34, -12 - rnd()*95, .25 + rnd()*.7);
+    PR.sparks = q(sp, PR.spark, 'a_s', 4);
+    PR.full = gl.createVertexArray();
+    const btn = byId('stylebtn');
+    if(btn){
+      btn.addEventListener('pointerenter', ()=>{ SW.goal += Math.PI; req(); });
+      btn.addEventListener('pointerleave', ()=>{ SW.goal += Math.PI; req(); });
+    }
+    PR.ref = {fb: gl.createFramebuffer(), tex: gl.createTexture(), rb: gl.createRenderbuffer(), w: 0, h: 0};
+    bind(cv);
+    return true;
+  }
+
+  // -- the exhibits -------------------------------------------------------------------------------
+  const TITLES = {
+    windows: 'Cumulative tokens per weekly limit window',
+    daily: 'Daily recorded input, stacked by model',
+    content: 'What filled the window',
+    models: 'Recorded input by model',
+  };
+  const NAMES = {ledger: 'The numbers', windows: 'Weekly limit windows', daily: 'Daily input',
+                 content: 'What filled the window', models: 'Input by model'};
+  function exhibits(){
+    EX.length = 0;
+    const panels = document.querySelectorAll('.wrap > .panel');
+    const add = (key, host, panel) => EX.push({key, host, panel, name: NAMES[key], src: undefined,
+                                               m: null, g: null, glass: [], pose: null, from: null,
+                                               to: null, t0: 0, dur: 0, kind: '', slot: EX.length - 1,
+                                               phase: EX.length*1.7, hot: -1, built: ''});
+    add('ledger', null, null);
+    add('windows', byId('rlchart'), panels[0] || null);
+    add('daily', byId('dailychart'), byId('dailychart') && byId('dailychart').closest('.panel'));
+    if(byId('catpie')) add('content', byId('catpie'), null);
+    if(byId('modelpie')) add('models', byId('modelpie'), null);
+  }
+  const text = el => el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+  const swatch = el => { const i = el.querySelector('i'); return i ? varOf(i.getAttribute('style')) : '--dim'; };
+  function legendOf(host){
+    const rows = [], out = {head: '', rows};
+    if(!host) return out;
+    for(const sp of host.querySelectorAll('.legend span')){
+      const i = sp.getAttribute('data-i'), sw = sp.querySelector('i');
+      if(i === null && !sw){ out.head = text(sp); continue; }
+      rows.push({i: i === null ? -1 : +i, s: text(sp), c: swatch(sp)});
+    }
+    if(!rows.length && !out.head) out.empty = text(host.querySelector('.sub'));
+    return out;
+  }
+  let tkPx = 900, pw = N3.PW;
+  function build(ex){
+    const cx = {col, measure: mwidth};
+    const rec = ex.host ? SCN.get(ex.host) : null;
+    const stamp = [rec ? 1 : 0, ex.hot, tkPx, pw, VIEW ? VIEW.join() : ''].join('|');
+    if(ex.m && ex.src === rec && ex.built === stamp) return false;
+    ex.src = rec; ex.built = stamp;
+    const tk = VIEW ? ticks(Math.max(120, tkPx)) : [];
+    let m;
+    if(ex.key === 'ledger'){
+      const k = document.querySelector('.kicker');
+      let kick = '';
+      try{ kick = getComputedStyle(k, '::before').content.replace(/^["']|["']$/g, '').replace(/\\"/g, '"'); }catch(_){}
+      m = N3.ledger({kicker: kick === 'none' ? '' : kick, title: text(document.querySelector('.mast h1')),
+                     dek: text(document.querySelector('.dek')), brand: text(document.querySelector('.brand')),
+                     tiles: Array.from(document.querySelectorAll('.tiles .tile'), t => ({
+                       k: text(t.querySelector('.k')), v: text(t.querySelector('.v')),
+                       n: text(t.querySelector('.n'))}))}, cx);
+    } else if(ex.key === 'windows'){
+      m = rec ? N3.windows(rec, {vmax: VMAX, wins: WINS, tk, view: VIEW, pw, title: TITLES.windows}, cx)
+              : N3.empty(text((ex.panel || document).querySelector('.sub')) || 'No weekly-limit snapshots in range.',
+                         {title: TITLES.windows, pw}, cx);
+    } else if(ex.key === 'daily'){
+      const svg = ex.host && ex.host.querySelector('svg');
+      m = rec ? N3.daily(rec, {peak: text(svg && svg.querySelector('.peak')), tk, view: VIEW, pw, title: TITLES.daily,
+                               legend: Array.from(ex.host.querySelectorAll('.legend span'), s => ({
+                                 s: text(s), c: swatch(s)}))}, cx)
+              : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES.daily, pw}, cx);
+    } else {
+      m = N3.medal(rec, {legend: legendOf(ex.host), hot: ex.hot, title: TITLES[ex.key]}, cx);
+    }
+    ex.m = m;
+    drop(ex.g); ex.glass.forEach(g => drop(g.g));
+    ex.g = mesh(m.solid);
+    ex.glass = m.glass.map(f => ({g: mesh(f.v), c: f.c, id: f.id}));
+    // The box is kept from the first build: a figure changing under the pointer must not
+    // make the exhibit jump to a new place on the stage.
+    if(!ex.box) ex.box = m.box;
+    return true;
+  }
+
+  // -- the stage ------------------------------------------------------------------------------------
+  function layout(snap){
+    base = N3.camera(wpx/hpx);
+    const sky = N3.slots(EX.length - 1, base);
+    EX.forEach((ex, i)=>{
+      ex.rest = i === F ? N3.fore(ex.box, base) : N3.skyPose(ex.box, sky[ex.slot], base);
+      if(!ex.pose || snap){ ex.pose = ex.rest; ex.to = null; }
+      else if(ex.to) ex.to = ex.rest;
+    });
+    // Ticks are laid out for the width the front time chart takes on screen.
+    const f = EX.find(e => e.key === 'windows') || EX.find(e => e.key === 'daily');
+    if(f && f.box){
+      const P = N3.fore(f.box, base), c = N3.centre(f.box);
+      const M = N3.pose(P.p, 0, 0, 0, 1, c);
+      const a = N3.ndc(base.VP, N3.xf(M, [0, 0, 0])), b = N3.ndc(base.VP, N3.xf(M, [pw, 0, 0]));
+      const px = Math.round(Math.abs(b[0] - a[0])/2*wpx*.8);
+      if(px !== tkPx){ tkPx = px; need = true; req(); }
+    }
+    laid = true;
+  }
+  const now = () => (performance.now() - T0)/1000;
+
+  function focus(i){
+    if(i === F || i < 0 || i >= EX.length) return;
+    const old = F;
+    F = i;
+    EX[old].slot = EX[i].slot;
+    EX[i].slot = -1;
+    const t = now();
+    for(const [ex, kind] of [[EX[i], 'down'], [EX[old], 'up']]){
+      ex.from = ex.pose;
+      ex.kind = REDUCE ? 'glide' : kind;
+      ex.t0 = t; ex.dur = REDUCE ? 0 : (kind === 'down' ? 1.7 : 1.35);
+    }
+    for(const ex of EX) if(ex.hot >= 0){ ex.hot = -1; ex.tip = null; need = true; }
+    hov = null;
+    layout(false);
+    EX[i].to = EX[i].rest; EX[old].to = EX[old].rest;
+    orb.gy = 0; orb.gp = 0; orb.gd = 1;
+    hint = Math.min(hint, .999);
+    if(live) live.textContent = EX[i].name + ', brought forward';
+    req();
+  }
+
+  // -- motion ---------------------------------------------------------------------------------------
+  function step(t){
+    let busy = false;
+    EX.forEach((ex, i)=>{
+      if(ex.to){
+        const k = ex.dur ? Math.min(1, (t - ex.t0)/ex.dur) : 1;
+        ex.pose = N3.tween(ex.from, ex.to, k, ex.kind);
+        if(k >= 1){
+          ex.pose = ex.to; ex.to = null;
+          if(lastPtr) setTimeout(()=>{ if(!drag && lastPtr) hover(lastPtr); }, 0);
+          if(ex.kind === 'down' && !REDUCE){               // where it comes down, the water rings
+            RIP.unshift([ex.pose.p[0], ex.pose.p[2], t, 1]);
+            RIP.length = Math.min(RIP.length, 4);
+          }
+        } else busy = true;
+      } else ex.pose = ex.rest || ex.pose;
+      // at rest: the one in front breathes on the water; the others hang and turn a little
+      const p = ex.pose, M = REDUCE ? 0 : 1, ph = ex.phase;
+      const bob = i === F ? .05*Math.sin(t*.8 + ph) : .35*Math.sin(t*.5 + ph);
+      const sway = i === F ? 0 : .07*Math.sin(t*.31 + ph);
+      const hot = (hov && hov.ex === ex && i !== F) ? .25 : 0;
+      ex.lit = (p.lit || 1) + hot;
+      const lean = i === F ? 0 : .015*Math.sin(t*.43 + ph);
+      ex.M = N3.pose([p.p[0], p.p[1] + bob*M, p.p[2]], p.yaw + sway*M, p.pitch, (p.roll || 0) + lean*M,
+                     p.s, N3.centre(ex.box));
+      ex.Mi = N3.inv(ex.M);
+    });
+    for(const k of ['yaw', 'pitch', 'dolly']){
+      const g = orb['g' + k[0]];
+      orb[k] += (g - orb[k])*(drag ? 1 : .08);
+      if(Math.abs(g - orb[k]) > 1e-4) busy = true;
+    }
+    if(hint < 1) hint = REDUCE ? 0 : Math.max(0, hint - .02);
+    const fx = EX[F], pv = fx && fx.pose ? fx.pose.p : N3.CAM.at;
+    const drift = REDUCE ? 0 : 1;
+    cam = N3.camera(wpx/hpx, {yaw: orb.yaw + .025*Math.sin(t*.09)*drift,
+                              pitch: orb.pitch + .012*Math.sin(t*.13)*drift, dolly: orb.dolly, pivot: pv});
+    return busy;
+  }
+
+  // -- drawing --------------------------------------------------------------------------------------
+  function common(P, mir){
+    gl.useProgram(P.p);
+    if(P.u.u_vp) gl.uniformMatrix4fv(P.u.u_vp, false, cam.VP);
+    if(P.u.u_eye) gl.uniform3fv(P.u.u_eye, cam.eye);
+    if(P.u.u_fog) gl.uniform3fv(P.u.u_fog, FOGC);
+    if(P.u.u_fogk) gl.uniform1f(P.u.u_fogk, P === PR.water ? .0085 : .0055);
+    if(P.u.u_mir) gl.uniform1f(P.u.u_mir, mir ? 1 : 0);
+    if(P.u.u_t) gl.uniform1f(P.u.u_t, REDUCE ? 0 : now());    // reduced motion: still water
+  }
+  let FOGC = [.2, .3, .35];
+  function sky(mir){
+    const P = PR.sky;
+    common(P, mir);
+    gl.uniformMatrix4fv(P.u.u_ivp, false, N3.inv(cam.VP));
+    gl.uniform3fv(P.u.u_eye, cam.eye);
+    gl.uniform3fv(P.u.u_zen, col('--n-zenith').slice(0, 3));
+    gl.uniform3fv(P.u.u_sky, col('--n-sky').slice(0, 3));
+    gl.uniform3fv(P.u.u_haze, col('--n-haze').slice(0, 3));
+    gl.uniform3fv(P.u.u_shore, col('--n-shore').slice(0, 3));
+    gl.uniform3fv(P.u.u_lamp, col('--n-lamp').slice(0, 3));
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.BLEND);
+    gl.bindVertexArray(PR.full);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  function lights(P, mir){
+    const k = [-.42, .62, .66], l = Math.hypot(...k);
+    gl.uniform3fv(P.u.u_key, [k[0]/l, (mir ? -1 : 1)*k[1]/l, k[2]/l]);
+    gl.uniform3fv(P.u.u_lamp, lin('--n-lamp').map(v => (.7 + .3*v)*1.3));
+    gl.uniform3fv(P.u.u_sky, lin('--n-haze').map(v => v*2.2 + .03));
+    gl.uniform3fv(P.u.u_gnd, lin('--n-sky').map(v => v*1.5 + .01));
+    gl.uniform3fv(P.u.u_rim, lin('--uncached', .5));
+  }
+  function solids(mir){
+    const P = PR.mesh;
+    common(P, mir); lights(P, mir);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.CULL_FACE);
+    gl.uniform1f(P.u.u_glass, 0); gl.uniform1f(P.u.u_ao, 1); gl.uniform1f(P.u.u_a, 1);
+    EX.forEach((ex, i)=>{
+      if(!ex.g || !ex.M) return;
+      gl.uniformMatrix4fv(P.u.u_m, false, ex.M);
+      gl.uniform1f(P.u.u_lit, ex.lit);
+      gl.uniform1f(P.u.u_hi, i === F ? ex.hot : -1);
+      gl.bindVertexArray(ex.g.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, ex.g.n);
+    });
+  }
+  const dist = ex => Math.hypot(ex.pose.p[0] - cam.eye[0], ex.pose.p[1] - cam.eye[1], ex.pose.p[2] - cam.eye[2]);
+  function glass(mir){
+    const P = PR.mesh;
+    common(P, mir); lights(P, mir);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.CULL_FACE);
+    gl.uniform1f(P.u.u_glass, 1); gl.uniform1f(P.u.u_ao, 0); gl.uniform1f(P.u.u_a, 1);
+    const order = EX.map((ex, i) => [ex, i]).filter(([ex]) => ex.glass.length && ex.M)
+      .sort((a, b) => dist(b[0]) - dist(a[0]));
+    for(const [ex, i] of order){
+      gl.uniformMatrix4fv(P.u.u_m, false, ex.M);
+      gl.uniform1f(P.u.u_lit, ex.lit);
+      gl.uniform1f(P.u.u_hi, i === F ? ex.hot : -1);
+      const fins = ex.glass.map(f => [f, Math.hypot(...[0, 1, 2].map(j => N3.xf(ex.M, f.c)[j] - cam.eye[j]))])
+        .sort((a, b) => b[1] - a[1]);
+      for(const face of [gl.FRONT, gl.BACK]){
+        gl.cullFace(mir ? (face === gl.FRONT ? gl.BACK : gl.FRONT) : face);
+        for(const [f] of fins){ gl.bindVertexArray(f.g.vao); gl.drawArrays(gl.TRIANGLES, 0, f.g.n); }
+      }
+    }
+    gl.disable(gl.CULL_FACE);
+  }
+  /** One word, flat on its exhibit's face; a word with depth is drawn as stacked layers. */
+  function drawWord(P, w, rgb, a){
+    const t = tex(w), h = w.h;
+    const tw = t.tw*h, x0 = w.al === 'c' ? w.x - tw/2 : w.al === 'r' ? w.x - tw : w.x;
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.uniform2f(P.u.u_sz, t.qw*h, t.qh*h);
+    const n = w.ext ? Math.max(2, Math.min(14, Math.round(w.ext*60))) : 0;
+    for(let k = n; k >= 0; k--){
+      const f = k ? .22 + .2*(1 - k/n) : 1;
+      gl.uniform4f(P.u.u_c, rgb[0]*f, rgb[1]*f, rgb[2]*f, a);
+      gl.uniform3f(P.u.u_o, x0 - t.pad*h, w.y - t.base*h, w.z - (n ? w.ext*k/n : 0));
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+  }
+  function lettering(mir){
+    const P = PR.text;
+    common(P, mir);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(P.u.u_tex, 0);
+    gl.bindVertexArray(PR.quad.vao);
+    const pxPer = hpx/(2*Math.tan(cam.fov/2));             // CSS px per world unit at distance 1
+    const order = EX.map((ex, i) => [ex, i]).filter(([ex]) => ex.m && ex.M).sort((a, b) => dist(b[0]) - dist(a[0]));
+    for(const [ex, i] of order){
+      gl.uniformMatrix4fv(P.u.u_m, false, ex.M);
+      const scale = ex.pose.s*pxPer/Math.max(1, dist(ex));
+      const lit = Math.min(1, ex.lit);
+      const pie = ex.key === 'content' || ex.key === 'models';
+      for(const w of ex.m.words){
+        const px = w.h*scale;
+        if(px < 3.5) continue;
+        let a = w.a*Math.min(1, (px - 3.5)/4)*(.35 + .65*lit);
+        if(pie && i === F && ex.hot >= 0 && w.id >= 0 && w.id !== ex.hot) a *= .35;
+        const c = col(w.c);
+        drawWord(P, w, c, a*c[3]);
+      }
+      if(i === F && ex.tip) for(const w of ex.tip) drawWord(P, w, col(w.c), 1);
+    }
+  }
+  /** The names of the exhibits in the sky, and the one line of help, facing the camera. */
+  function labels(){
+    const P = PR.text;
+    common(P, false);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(PR.quad.vao);
+    const IV = N3.inv(cam.V);
+    const R = [IV[0], IV[1], IV[2]], U = [IV[4], IV[5], IV[6]], B = [IV[8], IV[9], IV[10]];
+    const place = (p) => [R[0],R[1],R[2],0, U[0],U[1],U[2],0, B[0],B[1],B[2],0, p[0],p[1],p[2],1];
+    const unit = d => 2*d*Math.tan(cam.fov/2)/hpx;           // world units a CSS px, at distance d
+    EX.forEach((ex, i)=>{
+      if(i === F || !ex.M || !ex.box) return;
+      const c = N3.centre(ex.box);
+      const b = N3.xf(ex.M, [c[0], ex.box[1], ex.box[5]]);
+      const d = Math.hypot(b[0] - cam.eye[0], b[1] - cam.eye[1], b[2] - cam.eye[2]);
+      const u = unit(d), on = hov && hov.ex === ex;
+      gl.uniformMatrix4fv(P.u.u_m, false, place([b[0], b[1] - 14*u, b[2]]));
+      const w = {s: ex.name, h: 15*u, x: 0, y: 0, z: 0, al: 'c', f: 'serif', ext: 0};
+      const cc = col(on ? '--warn' : '--fg');
+      drawWord(P, w, cc, on ? 1 : .78);
+    });
+    if(hint > 0 && EX.length > 1){
+      const IVP = N3.inv(cam.VP);
+      const a = N3.xf(IVP, [0, N3.FORE_TOP + .045, .97]);
+      const p = [a[0]/a[3], a[1]/a[3], a[2]/a[3]];
+      const d = Math.hypot(p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2]);
+      gl.uniformMatrix4fv(P.u.u_m, false, place(p));
+      drawWord(P, {s: 'choose a chart in the sky to bring it down to the water', h: 13*unit(d),
+                   x: 0, y: 0, z: 0, al: 'c', f: 'serif', ext: 0}, col('--dim'), .9*hint);
+    }
+  }
+  function sparks(mir){
+    if(REDUCE) return;
+    const P = PR.spark;
+    common(P, mir);
+    gl.uniform1f(P.u.u_ps, 100*(cv.width/Math.max(1, wpx))*hpx/900);
+    gl.uniform3fv(P.u.u_c, col('--n-spark').slice(0, 3));
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.bindVertexArray(PR.sparks.vao);
+    gl.drawArrays(gl.POINTS, 0, PR.sparks.n);
+  }
+  function water(){
+    const P = PR.water;
+    common(P, false);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, PR.ref.tex);
+    gl.uniform1i(P.u.u_ref, 0);
+    gl.uniform2f(P.u.u_res, cv.width, cv.height);
+    gl.uniform3fv(P.u.u_water, col('--n-water').slice(0, 3));
+    gl.uniform3fv(P.u.u_lamp, col('--n-lamp').slice(0, 3));
+    const f = EX[F] && EX[F].pose ? EX[F].pose.p : [0, 0, 0];
+    gl.uniform3f(P.u.u_pool, f[0], f[2], 1);
+    const r = [];
+    for(let i = 0; i < 4; i++) r.push(...(RIP[i] || [0, 0, 0, 0]));
+    gl.uniform4fv(P.u.u_rip, r);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+    gl.bindVertexArray(PR.sheet.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, PR.sheet.n);
+  }
+  function reflection(){
+    const R = PR.ref, w = Math.max(1, cv.width >> 1), h = Math.max(1, cv.height >> 1);
+    if(R.w !== w || R.h !== h){
+      R.w = w; R.h = h;
+      gl.bindTexture(gl.TEXTURE_2D, R.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, R.rb);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, R.fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, R.tex, 0);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, R.rb);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fb);
+    gl.viewport(0, 0, w, h);
+    gl.depthMask(true);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    sky(true); solids(true); lettering(true); glass(true); sparks(true);
+  }
+
+  /** The switch: drawn where the page's button is, a few units in front of the eye, at the
+   *  dot's size; it rocks gently, and turns over while the pointer is on the button. */
+  const SW = {m: null, face: '', spin: 0, goal: 0, el: null};
+  function switcher(t){
+    const btn = SW.el || (SW.el = byId('stylebtn'));
+    const dot = btn && btn.querySelector('.sdot');
+    if(!btn || !dot) return;
+    const r = btn.getBoundingClientRect();
+    if(!r.width) return;
+    const face = getComputedStyle(dot).backgroundColor;
+    if(face !== SW.face){
+      SW.face = face;
+      drop(SW.m);
+      SW.m = mesh(N3.coin(parse(face), [1, 1, 1, 1], parse('#c9ced6')));
+    }
+    SW.spin += (SW.goal - SW.spin)*.12;
+    const [, dv] = rayAt({clientX: r.left + r.width/2, clientY: r.top + r.height/2}), dl = Math.hypot(...dv);
+    const p = [cam.eye[0] + dv[0]/dl*6, cam.eye[1] + dv[1]/dl*6, cam.eye[2] + dv[2]/dl*6];
+    const k = 9*2*6*Math.tan(cam.fov/2)/hpx;               // 9 CSS px, six units out
+    const W = N3.inv(cam.V);
+    const B = [W[0],W[1],W[2],0, W[4],W[5],W[6],0, W[8],W[9],W[10],0, p[0],p[1],p[2],1];
+    const M = N3.mul(B, N3.pose([0, 0, 0], (REDUCE ? 0 : .38*Math.sin(t*1.1)) + SW.spin, .12, 0, k, [0, 0, 0]));
+    const P = PR.mesh;
+    common(P, false); lights(P, false);
+    gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    gl.uniform1f(P.u.u_glass, 0); gl.uniform1f(P.u.u_ao, 0); gl.uniform1f(P.u.u_a, 1);
+    gl.uniform1f(P.u.u_lit, 1.1); gl.uniform1f(P.u.u_hi, -1);
+    gl.uniform1f(P.u.u_fogk, 0);
+    gl.uniformMatrix4fv(P.u.u_m, false, M);
+    gl.bindVertexArray(SW.m.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, SW.m.n);
+  }
+
+  function frame(){
+    raf = 0;
+    if(!on) return;
+    const t = now();
+    fit();
+    if(need){ need = false; EX.forEach(build); }
+    if(!laid) layout(true);
+    const busy = step(t);
+    FOGC = col('--n-haze').slice(0, 3).map(v => v*1.35);
+    reflection();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, cv.width, cv.height);
+    gl.depthMask(true);                                   // a clear honours the write mask
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    sky(false); water(); solids(false); lettering(false); glass(false); sparks(false); labels();
+    switcher(t);
+    if(!REDUCE || busy || hint > 0 && hint < 1 || Math.abs(SW.goal - SW.spin) > 1e-3) req();
+  }
+  function req(){ if(!raf && on) raf = requestAnimationFrame(frame); }
+
+  function fit(){
+    const r = cv.getBoundingClientRect();
+    const d = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+    if(w === wpx && h === hpx && d === dpr) return;
+    wpx = w; hpx = h; dpr = d;
+    let k = d;
+    if(w*h*k*k > 4.2e6) k = Math.sqrt(4.2e6/(w*h));      // keep a large screen interactive
+    cv.width = Math.round(w*k); cv.height = Math.round(h*k);
+    const p = N3.plotWidth(w/h);
+    if(p !== pw){ pw = p; EX.forEach(ex => { ex.box = null; }); }   // rebuilt, and placed anew
+    need = true;
+    laid = false;                                         // a new size: everything snaps into place
+  }
+
+  // -- the pointer --------------------------------------------------------------------------------
+  let drag = null, lastPtr = null;
+  const pts = new Map();
+  /** The ray from the eye through client point (x, y): its origin on the near plane, and a
+   *  direction reaching the far one. */
+  function rayAt(e){
+    const r = cv.getBoundingClientRect();
+    const x = (e.clientX - r.left)/r.width*2 - 1, y = 1 - (e.clientY - r.top)/r.height*2;
+    const IV = N3.inv(cam.VP), a = N3.xf(IV, [x, y, -1]), b = N3.xf(IV, [x, y, 1]);
+    const o = [a[0]/a[3], a[1]/a[3], a[2]/a[3]], f = [b[0]/b[3], b[1]/b[3], b[2]/b[3]];
+    return [o, [f[0] - o[0], f[1] - o[1], f[2] - o[2]]];
+  }
+  /** What is under the pointer: the exhibit, and for the one in front, the element. */
+  function pick(e){
+    if(!cam) return null;
+    const [o, d] = rayAt(e);
+    let best = null;
+    EX.forEach((ex, i)=>{
+      if(!ex.Mi || !ex.box) return;
+      const [lo, ld] = N3.local(ex.Mi, o, d);
+      const t = N3.rayBox(lo, ld, ex.box);
+      if(t !== null && (!best || t < best.t)) best = {ex, i, t, lo, ld};
+    });
+    if(!best || best.i !== F) return best;
+    const ex = best.ex, m = ex.m;
+    best.id = -1;
+    if(m.plot){
+      const q = N3.onPlane(best.lo, best.ld, m.plot.z);
+      if(q){
+        best.u = q[0]/m.plot.w; best.v = q[1]/m.plot.h;
+        best.plot = best.u >= 0 && best.u <= 1 && best.v >= -.15 && best.v <= 1.1;
+      }
+      for(const h of m.hits){
+        if(N3.rayBox(best.lo, best.ld, h.box) !== null || (q && q[0] >= h.box[0] && q[0] <= h.box[3]
+           && q[1] >= 0 && q[1] <= h.box[4] + .3)){ best.id = h.id; best.hit = h; break; }
+      }
+    } else if(m.medal){
+      const q = N3.onPlane(best.lo, best.ld, 0);
+      if(q) best.id = N3.sliceAt(q[0], q[1], m);
+      if(best.id < 0 && q){                                // or its line in the legend
+        for(const w of m.words){
+          if(w.id < 0) continue;
+          const tw = mwidth(w.s, w.f, w.h);
+          if(q[0] >= w.x - .5 && q[0] <= w.x + tw && q[1] >= w.y - .15 && q[1] <= w.y + w.h) best.id = w.id;
+        }
+      }
+    }
+    return best;
+  }
+  /** The label that answers a hovered element of the chart in front. */
+  function tipFor(ex, hit){
+    const H = ex.key === 'windows' ? N3.WIN_H : N3.DAY_H;
+    const x = Math.max(0, Math.min(ex.m.plot.w, (hit.box[0] + hit.box[3])/2));
+    const at = (s, k, c) => ({s, h: k ? .27 : .32, x, y: H + N3.TIP_Y + (k ? 0 : .42), z: .6, al: 'c', c, f: 'sans', ext: 0, w: k ? 400 : 600});
+    if(ex.key === 'windows'){
+      const w = WINS[hit.id];
+      if(!w) return null;
+      const t0 = w.reset_at != null ? w.reset_at : ((w.cum_points || [])[0] || [null])[0];
+      return [at(`window opened ${t0 == null ? '--' : when(t0)}  ·  peak reported ${w.peak_pct == null ? '--' : w.peak_pct + '%'}`, 0, '--fg'),
+              at(`recorded input ${big(w.tokens.input)} over ${w.tokens.responses.toLocaleString()} responses  ·  uncached ${big(w.tokens.uncached)}`, 1, '--dim')];
+    }
+    const row = (D.models.days || []).find(r => r[0] === hit.day);
+    if(!row) return null;
+    const tot = Object.values(row[2]).reduce((a, b) => a + b, 0);
+    const top = Object.entries(row[2]).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([m, v]) => `${m} ${big(v)}`).join('  ·  ');
+    return [at(`${day(hit.day)}  ·  ${big(tot)} recorded input`, 0, '--fg'), at(top, 1, '--dim')];
+  }
+  function hover(e){
+    const h = pick(e);
+    hov = h;
+    let cur = 'default';
+    EX.forEach((ex, i)=>{
+      const id = h && h.ex === ex && i === F ? h.id : -1;
+      if(ex.hot !== id){
+        ex.hot = id;
+        ex.tip = id >= 0 && ex.m.plot && h.hit ? tipFor(ex, h.hit) : null;
+        if(ex.key === 'content' || ex.key === 'models') need = true;
+      }
+    });
+    if(h && h.i !== F) cur = 'pointer';
+    else if(h && h.plot) cur = drag ? 'grabbing' : 'grab';
+    cv.style.cursor = cur;
+    req();
+  }
+  function bind(el){
+    el.addEventListener('pointerdown', e=>{
+      if(e.pointerType === 'mouse' && e.button !== 0) return;
+      try{ el.setPointerCapture(e.pointerId); }catch(_){}
+      const h = pick(e);
+      pts.set(e.pointerId, {x: e.clientX, y: e.clientY, u: h && h.plot ? h.u : null});
+      if(pts.size === 2){
+        const [a, b] = Array.from(pts.values());
+        drag = (a.u != null && b.u != null && VIEW)
+          ? {pinch: true, ua: a.u, ub: b.u, ta: Tat(L + a.u*PLOT), tb: Tat(L + b.u*PLOT)} : null;
+        return;
+      }
+      drag = {x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t: performance.now(),
+              pan: !!(h && h.i === F && h.plot && VIEW), u: h ? h.u : 0, moved: false,
+              yaw: orb.gy, pitch: orb.gp};
+      if(drag.pan) stopGlide();
+    });
+    el.addEventListener('pointermove', e=>{
+      lastPtr = e.pointerType === 'mouse' ? {clientX: e.clientX, clientY: e.clientY} : null;
+      const p = pts.get(e.pointerId);
+      if(p){ p.x = e.clientX; p.y = e.clientY; }
+      if(!drag){ hover(e); return; }
+      if(drag.pinch){
+        const v = Array.from(pts.keys()).map(id => { const q = pts.get(id); const h = pick({clientX: q.x, clientY: q.y}); return h && h.plot ? h.u : null; });
+        if(v[0] == null || v[1] == null) return;
+        const dx = (v[1] - v[0])*PLOT, dt = drag.tb - drag.ta;
+        if(Math.abs(dx) < 4 || dx*dt <= 0) return;
+        setSpan(dt*PLOT/dx, drag.ta, L + v[0]*PLOT);
+        return;
+      }
+      if(Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > 4) drag.moved = true;
+      if(!drag.moved) return;
+      if(drag.pan){
+        const h = pick(e);
+        if(h && h.u != null && h.i === F){ panPx((h.u - drag.u)*PLOT); drag.u = h.u; }
+      } else {
+        orb.gy = Math.max(-.75, Math.min(.75, drag.yaw - (e.clientX - drag.x0)*.004));
+        orb.gp = Math.max(-.08, Math.min(.42, drag.pitch + (e.clientY - drag.y0)*.003));
+        req();
+      }
+      e.preventDefault();
+    });
+    const lift = e=>{
+      pts.delete(e.pointerId);
+      if(!drag || pts.size) { if(!pts.size) drag = null; return; }
+      const d = drag;
+      drag = null;
+      if(!d.pinch && !d.moved && performance.now() - d.t < 600){
+        const h = pick(e);
+        if(h && h.i !== F){ focus(h.i); return; }
+      }
+      hover(e);                                           // a tap on a bar or a slice answers it
+    };
+    el.addEventListener('pointerup', lift);
+    el.addEventListener('pointercancel', e=>{ pts.delete(e.pointerId); drag = null; });
+    el.addEventListener('pointerleave', ()=>{ if(!drag){ hov = null; EX.forEach(ex=>{ if(ex.hot >= 0){ ex.hot = -1; ex.tip = null; need = true; } }); req(); } });
+    el.addEventListener('wheel', e=>{
+      e.preventDefault();
+      const h = pick(e);
+      const unit = e.deltaMode === 1 ? .05 : (e.deltaMode === 2 ? .8 : .002);
+      if(h && h.i === F && h.plot && VIEW){
+        if(Math.abs(e.deltaX) > Math.abs(e.deltaY)) panPx(-e.deltaX*PLOT/Math.max(1, tkPx/.8));
+        else if(e.deltaY) zoomAt(1/Math.exp(-e.deltaY*unit), L + Math.max(0, Math.min(1, h.u))*PLOT);
+        return;
+      }
+      orb.gd = Math.max(.72, Math.min(1.3, orb.gd*Math.exp(e.deltaY*unit*.5)));
+      req();
+    }, {passive: false});
+    el.addEventListener('dblclick', e=>{
+      const h = pick(e);
+      if(h && h.i === F && h.plot && DOM) glideTo([DOM[0], DOM[1]]);
+      else { orb.gy = 0; orb.gp = 0; orb.gd = 1; req(); }
+    });
+    document.addEventListener('keydown', e=>{
+      if(!on || e.ctrlKey || e.metaKey || e.altKey) return;
+      if(e.key === 'ArrowRight' || e.key === 'ArrowLeft'){
+        focus((F + (e.key === 'ArrowRight' ? 1 : -1) + EX.length) % EX.length);
+        e.preventDefault();
+      } else if(/^[1-9]$/.test(e.key) && +e.key <= EX.length) focus(+e.key - 1);
+      else if(e.key === 'Escape'){ orb.gy = 0; orb.gp = 0; orb.gd = 1; req(); }
+    });
+  }
+
+  let live = null;
+  function sync(){
+    const want = ok && SCENE_STYLES.indexOf(RT.getAttribute('data-style')) >= 0;
+    if(want && !cv){
+      if(!init()){ ok = false; }
+      else {
+        live = document.createElement('div');
+        live.className = 's3d-live'; live.setAttribute('aria-live', 'polite');
+        document.body.appendChild(live);
+        exhibits();
+      }
+    }
+    on = want && ok && !!gl;
+    if(on){
+      RT.setAttribute('data-s3d', '');
+      pal = {};
+      serif = getComputedStyle(RT).getPropertyValue('--serif').trim() || serif;
+      EX.forEach(ex => { ex.src = undefined; });
+      need = true;
+      req();
+    } else {
+      RT.removeAttribute('data-s3d');
+      if(raf){ cancelAnimationFrame(raf); raf = 0; }
+    }
+  }
+  try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{ pal = {}; need = true; req(); }); }catch(_){}
+  S3H.dirty = () => { need = true; req(); };
+  return {sync, focus, get front(){ return F; }};
+})();
+"""
+
+
 # The style switcher.  Kept apart from JS so the charts' script reads as it did; it runs after
 # init(), touches the charts only through measure() and redraw(), and does nothing at all
 # where there is no real DOM (scripts/test_page.js).
@@ -1472,6 +3048,7 @@ function applyStyle(i){
   try{ localStorage.setItem('tc-style', id); }catch(_){}
   try{ history.replaceState(null, '', '#style=' + id); }catch(_){}
   if(GLX) GLX.sync();
+  if(S3D) S3D.sync();
   if(VIEW){ measure(); redraw(); }
 }
 
@@ -1850,6 +3427,7 @@ def render(model):
         'domain': domain,
         'styles': STYLES,
         'gl_styles': GL_STYLES,
+        'scene_styles': SCENE_STYLES,
         'rate_limits': {
             'now': rl.get('now'),
             'current': rl.get('current'),
@@ -1907,6 +3485,6 @@ def render(model):
 
 </div>
 <script>window.__TC__ = {payload};</script>
-<script>{JS}{GL_JS}{STYLE_JS}</script>
+<script>{JS}{GL_JS}{SCENE_JS}{STYLE_JS}</script>
 </body></html>
 """

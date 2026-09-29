@@ -704,6 +704,16 @@ def test_render():
     check('Clinical paints its marks in WebGL',
           'clinical' in render.GL_STYLES
           and '"gl_styles":["clinical"]' in html and 'class="mk"' in html)
+    check('Nocturne is a style, and the one that is a 3D scene',
+          [s for s, _ in render.STYLES] == ['clinical', 'matisse', 'nocturne']
+          and render.SCENE_STYLES == ['nocturne'] and '"scene_styles":["nocturne"]' in html
+          and 'const S3D' in html and 'const N3' in html)
+    # Nocturne's categorical palette was validated as a set on its own plinth (render.py,
+    # STYLE_CSS): a slot changed alone can undo that without any other test noticing.
+    noct = ('--c0:#c1821f;--c1:#4174c7;--c2:#b04466;--c3:#14a685;--c4:#a55cc0;--c5:#4f9a5c;'
+            '--c6:#8f76cc;--c7:#5f9234;--c8:#6a78d6;--c9:#878c22;--c10:#7a86e0;--c11:#c96a22;'
+            '--c12:#3f86c8;--c13:#6f8290;')
+    check('Nocturne keeps the palette it was validated with', noct in flat)
     check('there is no effect switcher: the marks are always drawn plain',
           not hasattr(render, 'FX') and 'fxbtn' not in html and 'tc-fx' not in html
           and '"fx":' not in html)

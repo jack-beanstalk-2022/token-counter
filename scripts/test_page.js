@@ -51,10 +51,15 @@ function node(attrs = {}) {
   };
 }
 
-// The daily bars are rendered by Python; the page only ever moves them.
+// The daily bars are rendered by Python; the page only ever moves them, and reads their
+// segments once, for the marks it records.
 const dailyHtml = html.slice(html.indexOf('id="dailychart"'));
-const bars = [...dailyHtml.matchAll(/<g class="bar" data-a="(\d+)" data-b="(\d+)"/g)]
-  .map(m => Object.assign(node({ 'data-a': m[1], 'data-b': m[2] }), { sel: 'g.bar' }));
+const bars = [...dailyHtml.matchAll(/<g class="bar" data-a="(\d+)" data-b="(\d+)"[^>]*>([\s\S]*?)<\/g>/g)]
+  .map(m => Object.assign(node({ 'data-a': m[1], 'data-b': m[2] }), {
+    sel: 'g.bar',
+    kids: [...m[3].matchAll(/<rect x="[^"]*" y="([^"]*)" width="[^"]*" height="([^"]*)" fill="([^"]*)" class="mk">/g)]
+      .map(r => Object.assign(node({ y: r[1], height: r[2], fill: r[3] }), { sel: 'rect.mk' })),
+  }));
 if (!bars.length) throw new Error('no daily bars in the page');
 
 const clip = Object.assign(node(), { sel: '.clip' });
@@ -165,13 +170,96 @@ check('the limit chart records its marks for the WebGL layer, clipped to the plo
       JSON.stringify(rlMarks && rlMarks.clip));
 const firstRect = dMarks && dMarks.list.find(m => m.t === 'rect');
 check('the daily chart records its marks, and none outside the plot',
-      !!dMarks && dMarks.list.every(m => m.x + m.w >= L && m.x <= W - RM),
+      !!dMarks && dMarks.list.length > 0 && dMarks.list.every(m => m.x + m.w >= L && m.x <= W - RM),
       JSON.stringify(firstRect));
 const slices = pMarks && pMarks.list[0].slices;
 check('the pie records one slice per row, summing to the whole circle',
       !!slices && Math.abs(slices.reduce((a, s) => a + s[0], 0) - 1) < 1e-9
       && slices.every(s => /^--c\d+$/.test(s[1])), JSON.stringify(slices));
 check('without WebGL2 the layer stays out of the way', run('GLX') === null, String(run('GLX')));
+
+// 2c. the 3D scene (Nocturne) builds its solids from those same marks.  Its runtime needs
+// WebGL2 and stays null here; its geometry and its stage (N3) are pure, and checked.
+check('without WebGL2 the 3D scene stays out of the way, and the page is its 2D sheet',
+      run('S3D') === null && JSON.stringify(run('SCENE_STYLES')) === '["nocturne"]',
+      String(run('S3D')));
+check('the marks carry what the scene places them by: the plot, the window, the day',
+      JSON.stringify(rlMarks.plot) === JSON.stringify([L, 18, W - L - RM, 300 - 18 - 34])
+      && JSON.stringify(dMarks.plot) === JSON.stringify([L, 18, W - L - RM, 210 - 18 - 34])
+      && rlMarks.list.every(m => Number.isInteger(m.win))
+      && dMarks.list.every(m => m.day === +bars.find(b => b.getAttribute('data-a') == m.day).getAttribute('data-a')),
+      JSON.stringify([rlMarks.plot, dMarks.plot]));
+check('ticks can be laid over any width, and over the chart\'s own they are the page\'s',
+      JSON.stringify(run('ticks(PLOT)')) === JSON.stringify(run('ticks()'))
+      && run('ticks(PLOT*3)').length >= run('ticks()').length, '');
+const N3 = run('N3');
+const cx3 = { col: () => [1, 1, 1, 1], measure: (s, f, h) => String(s).length * h * .55 };
+const verts = v => { const o = []; for (let i = 0; i < v.length; i += N3.VS) o.push(v.slice(i, i + N3.VS)); return o; };
+{
+  const info = { vmax: run('VMAX'), wins: run('WINS'), tk: run('ticks()'), view: run('VIEW'), title: 't' };
+  const m = N3.windows(rlMarks, info, cx3);
+  const areas = rlMarks.list.filter(m => m.t === 'area');
+  const [px, py, pw, ph] = rlMarks.plot;
+  const top = a => Math.max(...a.pts.map(p => (py + ph - p[1]) / ph)) * N3.WIN_H;
+  check('every weekly window becomes one pane of glass, as tall as its curve',
+        m.glass.length === areas.length && m.glass.every((g, i) =>
+          Math.abs(Math.max(...verts(g.v).map(q => q[1])) - top(areas[i])) < 1e-6),
+        JSON.stringify(m.glass.map(g => g.id)));
+  const pct = run('Math.max(...WINS.flatMap(w => (w.pct_points||[]).map(p => p[1])))');
+  const wire = verts(m.solid).filter(q => q[10] >= 0 && q[2] > .4);
+  check('the gold wire reaches the reported peak, on the percentage axis',
+        wire.length && Math.abs(Math.max(...wire.map(q => q[1])) - pct / 100 * N3.WIN_H) < .06,
+        `${Math.max(...wire.map(q => q[1]))} vs ${pct / 100 * N3.WIN_H}`);
+}
+{
+  const info = { peak: 'peak', tk: run('ticks()'), view: run('VIEW'), title: 't', legend: [] };
+  const m = N3.daily(dMarks, info, cx3);
+  const rects = dMarks.list.filter(r => r.t === 'rect');
+  const [px, py, pw, ph] = dMarks.plot;
+  const blocks = verts(m.solid).filter(q => q[10] >= 0);
+  check('every stacked segment becomes one block of the skyline', rects.length > 0 && blocks.length === rects.length * 30,
+        `${blocks.length / 30} blocks for ${rects.length} segments`);
+  const tallest = Math.max(...rects.map(r => (py + ph - r.y) / ph)) * N3.DAY_H;
+  check('the tallest column stands at the height its bar reaches on the page, less its sliver',
+        Math.abs(Math.max(...blocks.map(q => q[1])) - tallest) <= .0181, `${Math.max(...blocks.map(q => q[1]))} vs ${tallest}`);
+  check('and every block stands inside the plot, on the stone',
+        blocks.every(q => q[0] >= -1e-9 && q[0] <= N3.PW + 1e-9 && q[1] >= 0), '');
+}
+{
+  const m = N3.medal(pMarks, { legend: { rows: [] }, hot: -1, title: 't' }, cx3);
+  const sl = pMarks.list[0].slices.filter(s => s[0] > 1e-6);
+  const turn = m.arcs.reduce((a, [, lo, hi]) => a + hi - lo, 0);
+  check('a medallion\'s slices close the circle, one arc a slice', m.arcs.length === sl.length
+        && Math.abs(turn - 2 * Math.PI) < 1e-9, `${m.arcs.length} arcs, ${turn}`);
+  const [i, lo, hi] = m.arcs[0], mid = (lo + hi) / 2;
+  check('pointing at a slice names it', N3.sliceAt(Math.cos(mid), m.medal.cy + Math.sin(mid), m) === i
+        && N3.sliceAt(0, m.medal.cy + 10, m) === -1, '');
+}
+{
+  const box = [-2.3, -.95, -1.5, 17.5, 7.65, 1.38];
+  for (const asp of [16 / 9, 390 / 844]) {
+    const cam = N3.camera(asp), P = N3.fore(box, cam);
+    const M = N3.pose(P.p, P.yaw, P.pitch, P.roll, P.s, N3.centre(box));
+    const q = N3.corners(box).map(c => N3.ndc(cam.VP, N3.xf(M, c)));
+    check(`the chart in front fits the screen, square to it, at aspect ${asp.toFixed(2)}`,
+          P.yaw === 0 && P.pitch === 0 && P.s === 1
+          && q.every(v => v[0] >= -.94 && v[0] <= .94 && v[1] >= -.91 && v[1] <= N3.FORE_TOP + 1e-6)
+          && P.p[1] - (N3.centre(box)[1] - box[1]) >= N3.FLOAT - 1e-9,
+          JSON.stringify(P));
+    const sl = N3.slots(4, cam);
+    const cells = sl.map(s => [s.ndc[0] - s.cw / 2, s.ndc[0] + s.cw / 2, s.ndc[1] - s.ch / 2, s.ndc[1] + s.ch / 2]);
+    const apart = cells.every((a, i) => cells.every((b, j) => i === j
+      || a[1] <= b[0] + 1e-9 || b[1] <= a[0] + 1e-9 || a[3] <= b[2] + 1e-9 || b[3] <= a[2] + 1e-9));
+    check(`the sky's slots sit above the front one and do not overlap, at aspect ${asp.toFixed(2)}`,
+          sl.length === 4 && apart && cells.every(c => c[2] > N3.FORE_TOP), JSON.stringify(cells));
+  }
+  const a = { p: [1, 2, 3], yaw: .1, pitch: .2, roll: 0, s: 1, lit: 1 };
+  const b = { p: [9, 8, -7], yaw: -.3, pitch: 0, roll: 0, s: .5, lit: .6 };
+  const same = (x, y) => ['yaw', 'pitch', 'roll', 's', 'lit'].every(k => Math.abs(x[k] - y[k]) < 1e-9)
+    && x.p.every((v, i) => Math.abs(v - y.p[i]) < 1e-9);
+  check('a flight starts where the exhibit was and ends where it goes, whichever way it flies',
+        ['down', 'up', 'glide'].every(k => same(N3.tween(a, b, 0, k), a) && same(N3.tween(a, b, 1, k), b)), '');
+}
 
 // 3. zoom: horizontal only, both charts, pie included
 const before = { rl: rlHost.innerHTML, bars: transforms() };
