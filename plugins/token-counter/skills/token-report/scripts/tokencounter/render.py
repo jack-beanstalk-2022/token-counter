@@ -83,8 +83,9 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 /* pan-y, not none: a vertical swipe still scrolls the page on a phone, while a horizontal
    drag and a two-finger pinch reach the chart instead of the browser. */
-.chart{touch-action:pan-y;cursor:grab;-webkit-user-select:none;user-select:none;
+.chart{touch-action:pan-y;-webkit-user-select:none;user-select:none;
   -webkit-tap-highlight-color:transparent}
+.chart.inplot{cursor:grab}
 .chart.drag{cursor:grabbing}
 .pie{flex:0 0 auto;width:240px;max-width:100%}
 .pies{display:flex;flex-wrap:wrap;gap:24px 48px}
@@ -367,7 +368,8 @@ function drawRL(tk){
   const y  = v => H-B - (v/VMAX)*(H-B-T);
   const yp = p => H-B - (p/100)*(H-B-T);
 
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="cumulative tokens per weekly limit window">`;
+  let s = `<svg viewBox="0 0 ${W} ${H}" data-h="${H}" data-t="${T}" data-b="${B}" role="img" `+
+          `aria-label="cumulative tokens per weekly limit window">`;
   s += `<defs><clipPath id="tcclip-rl"><rect x="${L}" y="0" width="${PLOT}" height="${H}"/>`+
        `</clipPath></defs>`;
   // horizontal guides + left axis (measured) + right axis (reported)
@@ -737,9 +739,28 @@ function reset(){
 
 // One set of gestures, bound to each chart: wheel and trackpad on a desktop, drag and
 // two-finger pinch on a touch screen, and a double-click back to the full range.
+// Only the plot itself answers a mouse: inside the axes, from the left axis to the right one
+// and from the top guide to the baseline.  The tick labels, the legend and the margins stay
+// the page's, so a wheel turned over them scrolls it.  (Touch is not limited: pan-y already
+// leaves a vertical swipe to the page anywhere on the chart.)
+function inPlot(el, e){
+  const svg = el.querySelector && el.querySelector('svg');
+  if(!svg || !svg.getBoundingClientRect) return false;
+  const r = svg.getBoundingClientRect();
+  const H = +svg.getAttribute('data-h'), T = +svg.getAttribute('data-t'), B = +svg.getAttribute('data-b');
+  if(!r.width || !r.height || !H) return false;
+  const x = (e.clientX - r.left)/r.width*W, y = (e.clientY - r.top)/r.height*H;
+  return x >= L && x <= W-RM && y >= T && y <= H-B;
+}
+
+// A wheel gesture -- events no more than WHEEL_GAP ms apart -- belongs wholly to the chart or
+// wholly to the page, whichever it started on.  Kept for the whole page, not per chart: a
+// page scroll carries a chart up under a still pointer, and that must go on scrolling.
+const WHEEL = {at: -1e9, mode: null};
+
 function bind(el){
   const pts = new Map();                     // live pointers, in viewBox x
-  let pinch = null, wheelAt = -1e9, wheelMode = null;
+  let pinch = null;
   const scale = () => W/(el.getBoundingClientRect().width || W);
   const vxOf = e => {
     const r = el.getBoundingClientRect();
@@ -748,26 +769,24 @@ function bind(el){
 
   el.addEventListener('wheel', e=>{
     if(!VIEW) return;
+    const t = e.timeStamp || Date.now();
+    if(t - WHEEL.at > WHEEL_GAP) WHEEL.mode = null;
+    if(WHEEL.mode === 'page' || (WHEEL.mode !== 'zoom' && !inPlot(el, e))) return;
     if(Math.abs(e.deltaX) > Math.abs(e.deltaY)){          // trackpad swipe: pan
+      WHEEL.mode = 'zoom';
       e.preventDefault();
       panPx(-e.deltaX*scale());
       return;
     }
     if(!e.deltaY) return;
-    // Zoomed all the way out, scrolling down scrolls the page.  A gesture -- wheel events
-    // no more than WHEEL_GAP ms apart -- stays with whichever it started on, so a swipe that
-    // zooms out to the full range spends its momentum there and the *next* one scrolls.
-    const t = e.timeStamp || Date.now();
-    if(t - wheelAt > WHEEL_GAP) wheelMode = null;
-    wheelAt = t;
+    // Zoomed all the way out, scrolling down scrolls the page -- but a gesture that zoomed
+    // out to the full range spends its momentum here, and the *next* one scrolls.
     const base = GOAL || VIEW;
-    if(wheelMode === 'page') return;
     if(e.deltaY > 0 && base[1]-base[0] >= (DOM[1]-DOM[0])*(1-1e-9)){
-      if(wheelMode !== 'zoom'){ wheelMode = 'page'; return; }
-      e.preventDefault();
+      if(WHEEL.mode === 'zoom') e.preventDefault();
       return;
     }
-    wheelMode = 'zoom';
+    WHEEL.mode = 'zoom';
     e.preventDefault();
     const unit = e.deltaMode===1 ? 0.05 : (e.deltaMode===2 ? 0.8 : 0.002);
     const vx = clamp(vxOf(e), L, W-RM);
@@ -776,6 +795,7 @@ function bind(el){
 
   el.addEventListener('pointerdown', e=>{
     if(!VIEW || (e.pointerType==='mouse' && e.button!==0)) return;
+    if(e.pointerType !== 'touch' && !pts.size && !inPlot(el, e)) return;
     try{ el.setPointerCapture(e.pointerId); }catch(_){}
     pts.set(e.pointerId, vxOf(e));
     stopGlide();
@@ -787,7 +807,7 @@ function bind(el){
   });
 
   el.addEventListener('pointermove', e=>{
-    if(!pts.has(e.pointerId)) return;
+    if(!pts.has(e.pointerId)){ el.classList.toggle('inplot', inPlot(el, e)); return; }
     const prev = pts.get(e.pointerId), vx = vxOf(e);
     pts.set(e.pointerId, vx);
     e.preventDefault();
@@ -812,7 +832,12 @@ function bind(el){
   el.addEventListener('pointerup', lift);
   el.addEventListener('pointercancel', lift);
   el.addEventListener('lostpointercapture', lift);
-  el.addEventListener('dblclick', e=>{ e.preventDefault(); if(DOM) glideTo([DOM[0], DOM[1]]); });
+  el.addEventListener('pointerleave', ()=>el.classList.remove('inplot'));
+  el.addEventListener('dblclick', e=>{
+    if(!inPlot(el, e)) return;
+    e.preventDefault();
+    if(DOM) glideTo([DOM[0], DOM[1]]);
+  });
 }
 
 function init(){
@@ -823,6 +848,10 @@ function init(){
   }
   measure();
   ['rlchart','dailychart'].forEach(id=>{ const el = byId(id); if(el) bind(el); });
+  addEventListener('wheel', e=>{                 // after the charts: whoever this one went to
+    WHEEL.at = e.timeStamp || Date.now();
+    if(!e.defaultPrevented) WHEEL.mode = 'page';
+  }, {passive:true});
   let rt = 0;
   addEventListener('resize', ()=>{
     clearTimeout(rt);

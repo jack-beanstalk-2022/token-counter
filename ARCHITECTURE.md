@@ -999,9 +999,15 @@ quarter of a second, as a true zoom -- the moment that sits at the same x in the
 leaves and the view it reaches stays put the whole way, and the span changes geometrically --
 and wheel turns that land mid-glide steer the goal, so a fast spin runs as one motion. A drag
 or a pinch follows the hand directly and takes over from a glide at once;
-`prefers-reduced-motion` jumps. **Zoomed all the way out, scrolling down scrolls the page.**
-A wheel gesture (events under 250 ms apart) stays with whatever it started on, so a swipe
-that zooms out to the full range spends its momentum on the chart, and the next one scrolls. **Zoom is horizontal
+`prefers-reduced-motion` jumps. **Only the plot answers a mouse**: the rectangle inside the
+axes, from the left axis to the right and from the top guide to the baseline. The tick
+labels, the date axis, the legend and the margins stay the page's, so a wheel turned over
+them scrolls it, and the grab cursor shows only over the plot. (Touch is not limited: the
+charts are `touch-action: pan-y`, which already leaves a vertical swipe to the page.)
+**Zoomed all the way out, scrolling down scrolls the page.** A wheel gesture (events under
+250 ms apart) belongs wholly to whichever it started on, tracked for the whole page: a swipe
+that zooms out to the full range spends its momentum on the chart and the next one scrolls,
+and a page scroll that carries a plot up under a still pointer goes on scrolling. **Zoom is horizontal
 only.** Each chart's value axis is fixed over the corpus, never over the viewport, so a bar's
 height and a curve's height mean the same thing at every zoom level; rescaling y to the
 visible slice would make two views of the same chart quietly incomparable.
