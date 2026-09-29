@@ -3,8 +3,8 @@
 No CDN, no network, no external fonts: the file is opened from disk and must render with
 the machine offline.  Charts are inline SVG; interaction is a few hundred lines of vanilla
 JS over an embedded JSON blob.  Under Clinical the chart marks are repainted by a small
-WebGL2 layer (GL_JS) whose last pass is a swappable effect shader (FX); the SVG keeps the
-axes, text and tooltips, and keeps the marks too wherever WebGL2 is missing.
+WebGL2 layer (GL_JS) whose last pass draws them through a simulated water surface; the SVG
+keeps the axes, text and tooltips, and keeps the marks too wherever WebGL2 is missing.
 
 The page ships its styles over one markup (STYLES), cycled by a button in the top bar or the
 `[` / `]` keys and remembered per browser.  A style never changes what the charts draw, only
@@ -126,16 +126,10 @@ STYLE_CSS = r"""
 .wipe{position:fixed;inset:0;z-index:60;pointer-events:none;background:var(--bg)}
 .wipe.go{display:block;animation:wipe .56s ease-in-out forwards}
 @keyframes wipe{0%{opacity:0}45%,55%{opacity:1}100%{opacity:0}}
-@media(max-width:640px){#stylebtn .sw-l,#fxbtn .sw-l,.keys{display:none} .brand{font-size:13px}}
+@media(max-width:640px){#stylebtn .sw-l,.keys{display:none} .brand{font-size:13px}}
 
 /* ---- the WebGL layer: marks painted on a canvas behind each panel's content ----------- */
-#fxbtn{display:none;font:inherit;font-size:13px;cursor:pointer;align-items:center;gap:8px;
-  margin-left:8px;padding:7px 12px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
-  border-radius:999px;white-space:nowrap}
-#fxbtn:focus-visible{outline:2px solid var(--uncached);outline-offset:2px}
-#fxbtn .sw-l{opacity:.7;text-transform:uppercase;font-size:11px;letter-spacing:.1em}
 .glc{display:none;position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-[data-gl] #fxbtn{display:inline-flex}
 [data-gl] .glc{display:block}
 [data-gl] .panel{position:relative}
 [data-gl] .panel>:not(.glc){position:relative}
@@ -870,57 +864,14 @@ init();
 # marks are simply left visible -- the page reads the same with or without this layer.
 #
 # A frame is drawn multisampled into an offscreen buffer, and reaches the screen through one
-# post pass: the effect.  An effect is a fragment shader over the finished panel, so adding
-# one is adding an entry to FX below; nothing else changes.
+# post pass, which draws it through the water (WAVE and SIM in GL_JS).
 GL_STYLES = ['clinical']
-
-# (id, label, animated, GLSL ES 3.00).  The GLSL defines `vec4 fx(vec2 uv)` and returns a
-# *premultiplied* colour (rgb never above alpha).  In scope:
-#   scene(uv)  the panel's marks, premultiplied, transparent where there are none
-#   u_res      the panel in device pixels         u_dpr   device pixels per CSS pixel
-#   u_time     seconds since the page opened -- only advances for an `animated` effect,
-#              and never under prefers-reduced-motion
-# uv runs 0..1 from the panel's bottom-left corner.  The first entry is the default, and is
-# the plain Clinical page.
-FX = [
-    ('none', 'None', False, """
-vec4 fx(vec2 uv){ return scene(uv); }"""),
-    ('glow', 'Glow', False, """
-vec4 fx(vec2 uv){
-  vec4 c = scene(uv), g = vec4(0.);
-  vec2 px = u_dpr / u_res;
-  for(int i = 0; i < 24; i++){                 // a golden-angle disc, denser at the centre
-    float f = float(i), r = 1.5 + 9. * sqrt((f + .5) / 24.), a = f * 2.39996;
-    g += scene(uv + vec2(cos(a), sin(a)) * r * px);
-  }
-  return c + g / 24. * .9 * (1. - c.a);         // a halo where the marks are not
-}"""),
-    ('scan', 'Scanlines', False, """
-vec4 fx(vec2 uv){
-  vec2 d = uv - .5;
-  vec2 off = vec2(1.5 * u_dpr / u_res.x, 0.) * (1. + 4. * dot(d, d));
-  vec4 r = scene(uv - off), g = scene(uv), b = scene(uv + off);
-  float line = .78 + .22 * step(.5, fract(gl_FragCoord.y / (3. * u_dpr)));
-  float a = (r.a + g.a + b.a) / 3.;             // each channel keeps its own coverage, so a
-  return vec4(min(vec3(r.r, g.g, b.b), vec3(a)), a) * line;   // split edge fringes, not darkens
-}"""),
-    ('sheen', 'Sheen', True, """
-vec4 fx(vec2 uv){
-  vec4 c = scene(uv);
-  float x = (uv.x * u_res.x + uv.y * u_res.y * .35) / u_dpr;
-  float band = fract(x / 900. - u_time * .18);
-  float k = smoothstep(0., .06, band) * smoothstep(.14, .06, band);
-  c.rgb = min(c.rgb + k * .45 * c.a, vec3(c.a));
-  return c;
-}"""),
-]
 
 GL_JS = r"""
 // ---- the WebGL layer ------------------------------------------------------------------
-// See GL_STYLES and FX in render.py.  Nothing here runs without a real DOM and WebGL2, so the
+// See GL_STYLES in render.py.  Nothing here runs without a real DOM and WebGL2, so the
 // stub DOM in scripts/test_page.js never reaches it.
 const GL_STYLES = D.gl_styles || [];
-const FXS = (D.fx && D.fx.length) ? D.fx : [['none', 'None', false, 'vec4 fx(vec2 uv){ return scene(uv); }']];
 // The water: a height field simulated on a coarse grid over the viewport (see SIM below).
 //   cell      grid spacing, CSS px -- larger is broader, smoother ripples
 //   brush     radius of the disturbance a pointer drags through the water, CSS px
@@ -940,8 +891,7 @@ const GLX = (()=>{
      || typeof WebGL2RenderingContext === 'undefined') return null;
   const RT = document.documentElement;
   const layers = new Map();                 // panel -> its canvas and GL state
-  const T0 = performance.now();
-  let ok = true, on = false, FI = 0, pal = null, queued = false, loop = 0;
+  let ok = true, on = false, pal = null, queued = false, loop = 0;
 
   // -- colour: the style's own variables, read once per style and theme ---------------
   function parse(v){
@@ -1062,17 +1012,16 @@ void main(){
   vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2));
   v_uv = p; gl_Position = vec4(p*2. - 1., 0., 1.);
 }`;
-  // Water: every effect is seen through one simulated surface (SIM below).  Its height field
+  // Water: the panel is seen through one simulated surface (SIM below).  Its height field
   // arrives as a texture over the viewport; the post pass reads the surface's slope where
-  // this pixel is, and samples the effect that far away -- a refraction -- splitting red and
+  // this pixel is, and samples the panel that far away -- a refraction -- splitting red and
   // blue a little either side, so a moving edge fringes as it would through a lens.
   const f1 = x => (+x).toFixed(4);
-  const POST_FS = body => `#version 300 es
+  const POST_FS = `#version 300 es
 precision highp float;
-uniform sampler2D u_scene, u_wave; uniform vec2 u_res, u_wo, u_wn; uniform float u_time, u_dpr;
+uniform sampler2D u_scene, u_wave; uniform vec2 u_res, u_wo, u_wn; uniform float u_dpr;
 in vec2 v_uv; out vec4 o_fx;
 vec4 scene(vec2 uv){ return texture(u_scene, uv); }
-${body}
 vec3 w_n;
 vec2 water(vec2 uv){
   vec2 cl = u_wo + vec2(uv.x, 1. - uv.y)*u_res/u_dpr;       // this pixel, client CSS px
@@ -1084,10 +1033,10 @@ vec2 water(vec2 uv){
 }
 void main(){
   vec2 off = water(v_uv), uv = v_uv + off;
-  vec4 c = fx(uv);
+  vec4 c = scene(uv);
   if(${f1(WAVE.disp)} > 0. && dot(off, off) > 1e-10){
     vec2 d = off*${f1(WAVE.disp)};
-    vec4 cr = fx(uv - d), cb = fx(uv + d);
+    vec4 cr = scene(uv - d), cb = scene(uv + d);
     c = vec4(cr.r, c.g, cb.b, max(c.a, max(cr.a, cb.a)));   // still premultiplied
   }
   if(${f1(WAVE.light)} > 0.){
@@ -1120,16 +1069,13 @@ void main(){
     return {p, u};
   }
 
-  /** The effect's program in this layer, compiled on first use.  One that does not compile
-   *  is reported once and drawn as `none`, rather than blanking the chart. */
-  function fxProg(Ly, i){
-    const [id, , , body] = FXS[i];
-    if(!(id in Ly.fx)){
-      try{ Ly.fx[id] = program(Ly.gl, POST_VS, POST_FS(body)); }
-      catch(e){ console.warn('token-counter: effect "'+id+'" did not compile\n'+e.message);
-                Ly.fx[id] = null; }
+  /** The post pass in this layer, compiled on first use; null if it does not compile. */
+  function postProg(Ly){
+    if(Ly.pp === undefined){
+      try{ Ly.pp = program(Ly.gl, POST_VS, POST_FS); }
+      catch(e){ console.warn('token-counter: WebGL post pass did not compile\n'+e.message); Ly.pp = null; }
     }
-    return Ly.fx[id] || (i ? fxProg(Ly, 0) : null);
+    return Ly.pp;
   }
 
   function layer(panel){
@@ -1145,7 +1091,7 @@ void main(){
     let mark;
     try{ mark = program(gl, MARK_VS, MARK_FS); }
     catch(e){ console.warn('token-counter: WebGL marks did not compile\n'+e.message); cv.remove(); return null; }
-    const Ly = {cv, gl, mark, fx:{}, w:0, h:0,
+    const Ly = {cv, gl, mark, pp: undefined, w:0, h:0,
                 buf: gl.createBuffer(), vao: gl.createVertexArray(), post: gl.createVertexArray(),
                 ms: gl.createFramebuffer(), rb: gl.createRenderbuffer(),
                 res: gl.createFramebuffer(), tex: gl.createTexture(),
@@ -1282,7 +1228,7 @@ void main(){
     gl.activeTexture(gl.TEXTURE0);
   }
 
-  function paint(Ly, panel, groups, now){
+  function paint(Ly, panel, groups){
     const gl = Ly.gl, dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cw = panel.clientWidth, ch = panel.clientHeight;
     const pw = Math.max(1, Math.round(cw*dpr)), ph = Math.max(1, Math.round(ch*dpr));
@@ -1323,16 +1269,16 @@ void main(){
     }
     gl.disable(gl.SCISSOR_TEST);
 
-    // 2. resolved into a texture the effect can sample
+    // 2. resolved into a texture the post pass can sample
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, Ly.ms);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, Ly.res);
     gl.blitFramebuffer(0, 0, pw, ph, 0, 0, pw, ph, gl.COLOR_BUFFER_BIT, gl.NEAREST);
 
-    // 3. the effect, onto the canvas
+    // 3. through the water, onto the canvas
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.disable(gl.BLEND);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    const P = fxProg(Ly, FI);
+    const P = postProg(Ly);
     if(!P){ ok = false; sync(); return; }
     gl.useProgram(P.p);
     gl.bindVertexArray(Ly.post);
@@ -1341,12 +1287,11 @@ void main(){
     if(P.u.u_scene) gl.uniform1i(P.u.u_scene, 0);
     if(P.u.u_res) gl.uniform2f(P.u.u_res, pw, ph);
     if(P.u.u_dpr) gl.uniform1f(P.u.u_dpr, dpr);
-    if(P.u.u_time) gl.uniform1f(P.u.u_time, now);
     water(P, gl, Ly, bx, by);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  const animated = () => on && !REDUCE && (FXS[FI][2] || SIM.live);
+  const animated = () => on && !REDUCE && SIM.live;
   function tickFrame(){
     loop = 0;
     if(SIM.live && on && !REDUCE) simRun();
@@ -1367,7 +1312,7 @@ void main(){
     host.insertBefore(TX.cv, host.firstChild);
     const gl = TX.cv.getContext('webgl2', {alpha:true, premultipliedAlpha:true, antialias:false,
                                            depth:false, stencil:false});
-    try{ TX.P = gl && program(gl, POST_VS, POST_FS(FXS[0][3])); }
+    try{ TX.P = gl && program(gl, POST_VS, POST_FS); }
     catch(e){ console.warn('token-counter: headline layer did not compile\n'+e.message); TX.P = null; }
     if(!gl || !TX.P){ TX.cv.remove(); return null; }
     TX.gl = gl; TX.tex = gl.createTexture(); TX.vao = gl.createVertexArray();
@@ -1459,7 +1404,6 @@ void main(){
   function frame(tick){
     queued = false;
     if(!on) return;
-    const now = animated() ? (performance.now() - T0)/1000 : 0;
     const byPanel = new Map();
     for(const p of layers.keys()) byPanel.set(p, []);    // a panel left empty is cleared
     for(const [host, g] of SCN){
@@ -1475,7 +1419,7 @@ void main(){
       }
       const Ly = layer(panel);
       if(!Ly){ ok = false; sync(); return; }
-      paint(Ly, panel, groups, now);
+      paint(Ly, panel, groups);
     }
     const th = document.querySelector('.tiles');
     if(!tick || !th || th.getBoundingClientRect().bottom > 0) paintText();
@@ -1490,19 +1434,6 @@ void main(){
     (typeof queueMicrotask === 'function' ? queueMicrotask : f=>Promise.resolve().then(f))(()=>frame(false));
   }
 
-  function label(){
-    const nm = document.getElementById('fxname'), btn = document.getElementById('fxbtn');
-    if(nm) nm.textContent = FXS[FI][1];
-    if(btn) btn.title = 'Effect -- next: ' + FXS[(FI+1)%FXS.length][1];
-  }
-
-  function setFx(i){
-    FI = (i % FXS.length + FXS.length) % FXS.length;
-    try{ localStorage.setItem('tc-fx', FXS[FI][0]); }catch(_){}
-    label();
-    request();
-  }
-
   function sync(){
     on = ok && GL_STYLES.indexOf(RT.getAttribute('data-style')) >= 0;
     if(on) RT.setAttribute('data-gl', ''); else RT.removeAttribute('data-gl');
@@ -1510,19 +1441,11 @@ void main(){
     request();
   }
 
-  try{
-    const id = localStorage.getItem('tc-fx');
-    const i = FXS.findIndex(f=>f[0] === id);
-    if(i >= 0) FI = i;
-  }catch(_){}
-  label();
-  const btn = document.getElementById('fxbtn');
-  if(btn) btn.addEventListener('click', e=>setFx(FI + (e.shiftKey ? -1 : 1)));
   try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{ pal = null; request(); }); }
   catch(_){}
   addEventListener('resize', ()=>{ simFit(); request(); });
   GLH.dirty = request;
-  return {sync, setFx, request};
+  return {sync, request};
 })();
 """
 
@@ -1925,7 +1848,6 @@ def render(model):
         'domain': domain,
         'styles': STYLES,
         'gl_styles': GL_STYLES,
-        'fx': [list(f) for f in FX],
         'rate_limits': {
             'now': rl.get('now'),
             'current': rl.get('current'),
@@ -1962,7 +1884,7 @@ def render(model):
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
 <div class="deco" aria-hidden="true">{_matisse()}<div class="wipe"></div></div>
-<nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button><button id="fxbtn" type="button" aria-label="Cycle the chart effect"><span class="sw-l">FX</span><b id="fxname">{FX[0][1]}</b></button></div></nav>
+<nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button></div></nav>
 <div class="wrap">
 
 <header class="mast">
