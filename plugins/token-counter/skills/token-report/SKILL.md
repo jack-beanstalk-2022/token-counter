@@ -9,7 +9,8 @@ Re-tokenizes `~/.codex/sessions/**/rollout-*.jsonl` locally and renders a self-c
 dashboard. Every figure comes from rollout logs; `~/.codex/auth.json` is read only to name the
 account (id_token identity claims — never the access or refresh tokens, and `--no-account`
 skips it). Nothing is intercepted, nothing is sent anywhere, and no pricing translation is
-applied.
+applied. Publishing numbers to the tokenusage.dev leaderboard is a different skill,
+token-share, used only when the user asks to share.
 
 Run from this skill's directory. Use whichever interpreter name exists on the machine:
 `python3` on macOS and Linux, `python` on Windows, where `python3` is usually a Microsoft
