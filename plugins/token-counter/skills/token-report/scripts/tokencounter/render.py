@@ -137,6 +137,13 @@ STYLE_CSS = r"""
 [data-gl] .panel>:not(.glc){position:relative}
 /* The SVG marks stay in place, transparent, so their tooltips still answer the pointer. */
 [data-gl] .mk{fill-opacity:0!important;stroke-opacity:0!important}
+/* The headline numbers, repainted into the GL layer so the water reaches them: the canvas
+   sits over the tiles, and the text under it keeps its place (and stays selectable and
+   readable to assistive tech) but is not painted. */
+.glt{display:none;position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+[data-gl] .tiles{position:relative}
+[data-gl] .glt{display:block}
+[data-gl] .tiles.gltxt .tile>*{opacity:0}
 
 /* ---- 1. CLINICAL: the base sheet above, light or dark with the system ----------------- */
 
@@ -787,11 +794,14 @@ GL_JS = r"""
 // stub DOM in scripts/test_page.js never reaches it.
 const GL_STYLES = D.gl_styles || [];
 const FXS = (D.fx && D.fx.length) ? D.fx : [['none', 'None', false, 'vec4 fx(vec2 uv){ return scene(uv); }']];
+const NDROP = 16;                           // ripples alive at once, at most
 const GLX = (()=>{
   if(typeof document === 'undefined' || !document.createElement || !document.querySelectorAll
      || typeof WebGL2RenderingContext === 'undefined') return null;
   const RT = document.documentElement;
   const layers = new Map();                 // panel -> its canvas and GL state
+  const DROPS = [];                         // {x, y (client px), t (ms), a (0..1)}, oldest first
+  const DROP_LIFE = 2600;                   // ms until a ripple has spread out to nothing
   const T0 = performance.now();
   let ok = true, on = false, FI = 0, pal = null, queued = false, loop = 0;
 
@@ -914,13 +924,41 @@ void main(){
   vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2));
   v_uv = p; gl_Position = vec4(p*2. - 1., 0., 1.);
 }`;
+  // Water: a fast pointer drops ripples (see DROPS below).  Each is a packet of waves on an
+  // expanding ring, fading as it spreads.  The ripples bend where the effect samples the
+  // panel -- so every effect is seen through the same water -- and light the crests and
+  // shade the troughs faintly, so a ring shows over empty paper too.
   const POST_FS = body => `#version 300 es
 precision highp float;
 uniform sampler2D u_scene; uniform vec2 u_res; uniform float u_time, u_dpr;
+uniform vec4 u_drop[${NDROP}]; uniform int u_ndrop;
 in vec2 v_uv; out vec4 o_fx;
 vec4 scene(vec2 uv){ return texture(u_scene, uv); }
 ${body}
-void main(){ o_fx = fx(v_uv); }`;
+float h_water;
+vec2 water(vec2 uv){
+  vec2 p = uv*u_res, off = vec2(0.);
+  float h = 0., sig = 34.*u_dpr, lam = 8.*u_dpr;
+  for(int i = 0; i < ${NDROP}; i++){
+    if(i >= u_ndrop) break;
+    vec4 d = u_drop[i];                  // x, y in device px from the panel's bottom-left,
+    vec2 v = p - d.xy;                   // age in seconds, amplitude 0..1
+    float r = length(v), k = r - d.z*360.*u_dpr;
+    float env = exp(-k*k/(2.*sig*sig)) * exp(-d.z*1.8) * d.w;
+    float w = sin(k/lam)*env;
+    off += (r > .5 ? v/r : vec2(0.)) * w * 9.*u_dpr;
+    h += w;
+  }
+  h_water = h;
+  return uv + off/u_res;
+}
+void main(){
+  vec4 c = fx(water(v_uv));
+  float up = max(h_water, 0.), dn = max(-h_water, 0.);
+  c = c*(1. - up*.14) + vec4(up*.14);     // a lit crest: premultiplied white over
+  c = c*(1. - dn*.07) + vec4(0., 0., 0., dn*.07);   // a shaded trough
+  o_fx = c;
+}`;
 
   function program(gl, vs, fs){
     const sh = (type, src)=>{
@@ -1000,6 +1038,21 @@ void main(){ o_fx = fx(v_uv); }`;
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, Ly.tex, 0);
   }
 
+  /** The live ripples, in the device pixels of a canvas whose top-left is at (bx, by). */
+  function water(P, gl, bx, by, dpr, ph){
+    if(!P.u['u_drop[0]']) return;
+    const tn = performance.now(), D4 = new Float32Array(NDROP*4);
+    let n = 0;
+    for(const d of DROPS){
+      const age = (tn - d.t)/1000;
+      if(age*1000 > DROP_LIFE) continue;
+      D4.set([(d.x - bx)*dpr, ph - (d.y - by)*dpr, age, d.a], n*4);
+      n++;
+    }
+    gl.uniform4fv(P.u['u_drop[0]'], D4);
+    gl.uniform1i(P.u.u_ndrop, n);
+  }
+
   function paint(Ly, panel, groups, now){
     const gl = Ly.gl, dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cw = panel.clientWidth, ch = panel.clientHeight;
@@ -1060,10 +1113,122 @@ void main(){ o_fx = fx(v_uv); }`;
     if(P.u.u_res) gl.uniform2f(P.u.u_res, pw, ph);
     if(P.u.u_dpr) gl.uniform1f(P.u.u_dpr, dpr);
     if(P.u.u_time) gl.uniform1f(P.u.u_time, now);
+    water(P, gl, bx, by, dpr, ph);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  const animated = () => on && FXS[FI][2] && !REDUCE;
+  const rippling = () => {
+    const now = performance.now();
+    while(DROPS.length && now - DROPS[0].t > DROP_LIFE) DROPS.shift();
+    return DROPS.length > 0;
+  };
+  const animated = () => on && !REDUCE && (FXS[FI][2] || rippling());
+
+  // -- the headline numbers: their text drawn into a texture, so ripples cross them too ---
+  // Each glyph is placed where the browser laid it out (a Range per character), in the
+  // element's own computed font, colour, letter-spacing and case; so wrapping, fallback
+  // fonts and the theme all come out as the page drew them.  Redrawn only when the text,
+  // the size or the style changes; between those, a ripple frame just re-samples it.
+  const TX = {cv: null, gl: null, P: null, tex: null, vao: null, pad: null, stamp: ''};
+  function textLayer(host){
+    if(TX.cv) return TX.gl ? TX : null;
+    TX.cv = document.createElement('canvas');
+    TX.cv.className = 'glt';
+    TX.cv.setAttribute('aria-hidden', 'true');
+    host.insertBefore(TX.cv, host.firstChild);
+    const gl = TX.cv.getContext('webgl2', {alpha:true, premultipliedAlpha:true, antialias:false,
+                                           depth:false, stencil:false});
+    try{ TX.P = gl && program(gl, POST_VS, POST_FS(FXS[0][3])); }
+    catch(e){ console.warn('token-counter: headline layer did not compile\n'+e.message); TX.P = null; }
+    if(!gl || !TX.P){ TX.cv.remove(); return null; }
+    TX.gl = gl; TX.tex = gl.createTexture(); TX.vao = gl.createVertexArray();
+    TX.pad = document.createElement('canvas');
+    return TX;
+  }
+  function paintText(){
+    const host = document.querySelector('.tiles');
+    if(!host) return;
+    const L = textLayer(host);
+    if(!L){ host.classList.remove('gltxt'); return; }
+    const gl = L.gl, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const hr = host.getBoundingClientRect();
+    const pw = Math.max(1, Math.round(hr.width*dpr)), ph = Math.max(1, Math.round(hr.height*dpr));
+    const els = host.querySelectorAll('.tile>*');
+    const stamp = [pw, ph, RT.getAttribute('data-style'), matchMedia('(prefers-color-scheme: dark)').matches]
+      .concat(Array.from(els, e=>e.textContent)).join('|');
+    if(stamp !== L.stamp){
+      L.stamp = stamp;
+      const pad = L.pad;
+      pad.width = pw; pad.height = ph;
+      const x = pad.getContext('2d');
+      x.scale(dpr, dpr);
+      const rg = document.createRange();
+      for(const el of els){
+        const cs = getComputedStyle(el);
+        x.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        x.fillStyle = cs.color;
+        x.textBaseline = 'alphabetic';
+        const asc = x.measureText('Hg').fontBoundingBoxAscent || parseFloat(cs.fontSize)*.8;
+        const up = cs.textTransform === 'uppercase';
+        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for(let n = walk.nextNode(); n; n = walk.nextNode()){
+          const t = n.nodeValue;
+          for(let i = 0; i < t.length; i++){
+            if(t[i] === ' ' || t[i] === '\n') continue;
+            rg.setStart(n, i); rg.setEnd(n, i+1);
+            const r = rg.getBoundingClientRect();
+            if(!r.width) continue;
+            x.fillText(up ? t[i].toUpperCase() : t[i], r.left - hr.left, r.top - hr.top + asc);
+          }
+        }
+      }
+      L.cv.width = pw; L.cv.height = ph;
+      gl.bindTexture(gl.TEXTURE_2D, L.tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pad);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      host.classList.add('gltxt');
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, pw, ph);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(L.P.p);
+    gl.bindVertexArray(L.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, L.tex);
+    if(L.P.u.u_scene) gl.uniform1i(L.P.u.u_scene, 0);
+    if(L.P.u.u_res) gl.uniform2f(L.P.u.u_res, pw, ph);
+    if(L.P.u.u_dpr) gl.uniform1f(L.P.u.u_dpr, dpr);
+    water(L.P, gl, hr.left, hr.top, dpr, ph);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // Only a fast hand makes waves: a pointer moving over ~1.4 px/ms, not dragging a chart.
+  // Drops are spaced out along the path, and stronger the faster the pointer went.
+  let last = null;
+  addEventListener('pointermove', e=>{
+    if(!on || REDUCE || e.pointerType === 'touch' || e.buttons){ last = null; return; }
+    const t = e.timeStamp || performance.now();
+    if(last){
+      const dt = Math.max(1, t - last.t), dist = Math.hypot(e.clientX - last.x, e.clientY - last.y);
+      const v = dist/dt;
+      last.v = last.v*.6 + v*.4;
+      const prev = DROPS[DROPS.length-1];
+      if(last.v > 1.4 && (!prev || Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > 56
+                          || performance.now() - prev.t > 90)){
+        DROPS.push({x: e.clientX, y: e.clientY, t: performance.now(),
+                    a: Math.min(1, .3 + (last.v - 1.4)/3)});
+        if(DROPS.length > NDROP) DROPS.shift();
+        if(!loop) loop = requestAnimationFrame(()=>{ loop = 0; frame(true); });
+      }
+      last.x = e.clientX; last.y = e.clientY; last.t = t;
+    } else last = {x: e.clientX, y: e.clientY, t, v: 0};
+  }, {passive: true});
 
   function frame(tick){
     queued = false;
@@ -1086,6 +1251,8 @@ void main(){ o_fx = fx(v_uv); }`;
       if(!Ly){ ok = false; sync(); return; }
       paint(Ly, panel, groups, now);
     }
+    const th = document.querySelector('.tiles');
+    if(!tick || !th || th.getBoundingClientRect().bottom > 0) paintText();
     if(animated() && !loop) loop = requestAnimationFrame(()=>{ loop = 0; frame(true); });
   }
 

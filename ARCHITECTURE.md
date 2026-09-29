@@ -964,6 +964,18 @@ and never runs under `prefers-reduced-motion`; an effect that fails to compile i
 in the console and drawn as `none`. No WebGL2, a failed context, a lost context, or any
 other style: `data-gl` comes off the root and the SVG marks are simply visible again.
 
+**Water.** Under whichever effect is chosen, the page is seen through water. A pointer moving
+fast (over ~1.4 px/ms; not a touch, not a drag of the charts) drops ripples along its path,
+stronger the faster it went, up to 16 alive at once for 2.6 s each. The post pass bends where
+the effect samples the panel by the sum of the ripples, packets of waves on expanding rings,
+and lights their crests and shades their troughs faintly so a ring shows over empty paper
+too. Ripples are kept in page coordinates and handed to every canvas in its own pixels, so
+one ring crosses the tiles and the charts as a single surface. The headline tiles join the
+layer for this: their text is drawn into a texture glyph by glyph, where the browser laid
+each one out and in its computed font, colour, spacing and case, and the text beneath stays
+in place, selectable and readable, just not painted. Frames run only while a ripple is alive;
+`prefers-reduced-motion` makes none.
+
 ### 7.1 One time axis, one viewport
 
 Charts 2 and 3 answer different questions about the same hours, and are only useful together
