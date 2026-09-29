@@ -950,7 +950,8 @@ colours as CSS variable names). The layer puts one canvas behind each panel's co
 the shapes, and draws them into a 4× multisampled buffer that is resolved to a texture and
 put on screen through **one post pass, the effect**. The SVG is not replaced: it still
 draws the grid, the axes, every label and every tooltip, and its marks stay in place with
-zero opacity so hover titles keep answering the pointer. The layer draws in the same task as
+zero opacity so the pointer still finds them (the time charts' hover titles, the pie slices'
+legend highlight). The layer draws in the same task as
 the SVG it replaces (a microtask, not the next frame), so axes and marks never part during a
 drag; colours are read from the style's own variables, so light and dark follow the system.
 
@@ -1015,6 +1016,10 @@ chart is drawn in. A range with nothing in it (an idle day) keeps the pie's plac
 ring and says why, rather than collapsing the panel. That series is
 36% of the page's bytes, which is the price of a composition chart that answers *for the week
 on screen* rather than for the corpus.
+
+A pie slice has no tooltip: hovering one lights its line in the legend beside it, which
+already carries the name and the share, and dims the others; the highlight holds while the
+pie turns under the pointer. (A slice under 0.05% has no legend line, so lights nothing.)
 
 The pies follow a beat behind. A drag or a zoom redraws the time charts on every frame, and
 recomposing two pies at that rate reads as flicker, so they wait until the viewport has been
