@@ -927,8 +927,11 @@ badge; measurements carry a neutral `measured` badge. The page opens with a stan
 that these are *recorded*, not billed, counts.
 
 **Styles.** The page carries two styles over one markup — **Clinical** (the original look,
-light or dark with the system, and the default) and **Matisse** — cycled by the button in the
-top bar or `[` / `]`, and remembered in `localStorage` and the URL hash (`#style=matisse`); a
+light or dark with the system, and the default) and **Matisse** — cycled by the dot at the
+top right of the bar or `[` / `]`. The dot carries no words or symbols: it is drawn in the
+style it switches *to* (a blue disc on a white ring for Clinical, a cobalt gouache cut-out
+over a sage sheet for Matisse), with fixed colours rather than the page's variables, and
+names that style only to assistive tech. Styles are remembered in `localStorage` and the URL hash (`#style=matisse`); a
 remembered style the page no longer carries falls back to the first. A style is CSS keyed on
 `html[data-style]`; every chart colour is a CSS variable, so the charts restyle without being
 redrawn except to re-measure a panel whose width changed. **Matisse** is the late cut-outs,
@@ -944,35 +947,30 @@ the switch's fade.
 
 **The WebGL layer.** Under Clinical (`GL_STYLES` in `render.py`) the chart *marks* — the
 limit chart's area and curves, the daily bars, the pie slices — are painted by WebGL2, so
-effects can be applied to them. Every chart, in every style, records what it drew as plain
+the water (below) can bend them. Every chart, in every style, records what it drew as plain
 shapes in its SVG's own units (`SCN`: areas, polylines with optional dashes, rects, pies,
 colours as CSS variable names). The layer puts one canvas behind each panel's content, reads
 the shapes, and draws them into a 4× multisampled buffer that is resolved to a texture and
-put on screen through **one post pass, the effect**. The SVG is not replaced: it still
+put on screen through **one post pass**, which draws the panel through the water. The SVG is not replaced: it still
 draws the grid, the axes, every label and every tooltip, and its marks stay in place with
 zero opacity so the pointer still finds them (the time charts' hover titles, the pie slices'
 legend highlight). The layer draws in the same task as
 the SVG it replaces (a microtask, not the next frame), so axes and marks never part during a
 drag; colours are read from the style's own variables, so light and dark follow the system.
 
-An effect is an entry in `FX`: an id, a label, whether it animates, and a GLSL ES 3.00 body
-defining `vec4 fx(vec2 uv)` over `scene(uv)` (the panel's marks, premultiplied) with
-`u_res`, `u_dpr` and `u_time` in scope. Adding one needs no other change. The first entry,
-`none`, is the plain Clinical page and the default; the page ships `glow`, `scan` and an
-animated `sheen` as examples, cycled by the **FX** button (shown only while the layer is
-running) and remembered in `localStorage`. An animated effect redraws only on-screen panels
-and never runs under `prefers-reduced-motion`; an effect that fails to compile is reported
-in the console and drawn as `none`. No WebGL2, a failed context, a lost context, or any
-other style: `data-gl` comes off the root and the SVG marks are simply visible again.
+The marks are always drawn plain: there is no effect switcher. (Earlier revisions carried
+a catalogue of post-pass effects and an **FX** button to cycle them; both were removed.) No
+WebGL2, a failed context, a lost context, a post pass that fails to compile, or any other
+style: `data-gl` comes off the root and the SVG marks are simply visible again.
 
-**Water.** Under whichever effect is chosen, the page is seen through water. The surface is
+**Water.** The page is seen through water. The surface is
 simulated: a height field on a grid over the viewport, six CSS pixels a cell, where every step
 pulls each cell's velocity toward its neighbours' mean height, evens it out a little with
 theirs, and damps it, so a disturbance travels outward as rings, reflects and interferes, and
 dies away. A pointer moving over ~0.3 px/ms (not a touch, not a drag of the charts) drags a
 soft brush through it along its path, harder the faster it went; slower than that, reading or
 hovering a tooltip, it leaves the water alone. The post pass reads the surface's slope under
-each pixel and samples the effect that far away -- a refraction -- with red and blue split
+each pixel and samples the panel that far away -- a refraction -- with red and blue split
 slightly either side, so an edge fringes as through a lens. There is no lighting by default
 (`WAVE.light`); every tunable -- cell, brush, speed, damping, viscosity, refraction, dispersion
 -- is one entry in `WAVE` in `GL_JS`. One field serves every canvas and is kept to the page
