@@ -76,6 +76,9 @@ body{margin:0;background:var(--bg);color:var(--fg);
 .legend{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0 2px;font-size:12px;color:var(--dim)}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
 .legend b{color:var(--fg);font-variant-numeric:tabular-nums}
+.legend [data-i]{transition:opacity .12s,color .12s}
+.hi .legend [data-i]{opacity:.35}
+.hi .legend [data-i].on{opacity:1;color:var(--fg);font-weight:600}
 svg{display:block;width:100%;height:auto;overflow:visible}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 /* pan-y, not none: a vertical swipe still scrolls the page on a phone, while a horizontal
@@ -551,6 +554,7 @@ function pieTo(host, rows, sum, what, label){
     host.__shown = to;
     host.innerHTML = pie(rows, sum, what, label, to);
     pieMarks(host, rows, to);
+    pieHover(host);
     return;
   }
   let t0 = null;
@@ -561,9 +565,34 @@ function pieTo(host, rows, sum, what, label){
     host.__shown = from.map((f,i)=>f + (to[i]-f)*e);
     host.innerHTML = pie(rows, sum, what, label, host.__shown);
     pieMarks(host, rows, host.__shown);
+    pieHover(host);
     if(k < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/** Hovering a slice lights its legend line and dims the rest, in place of a tooltip: the
+ *  legend already carries the name and the share.  The hovered index lives on the host, so
+ *  it survives the pie being redrawn under the pointer while it turns to a new range. */
+function pieHover(host){
+  if(!host.addEventListener || !host.querySelectorAll                 // a stub DOM
+     || !host.classList || typeof host.classList.toggle !== 'function') return;
+  if(!host.__hov){
+    host.__hov = true;
+    const set = i=>{ if(host.__hi !== i){ host.__hi = i; pieHover(host); } };
+    host.addEventListener('pointerover', e=>{
+      const sl = e.target && e.target.closest && e.target.closest('.pie [data-i]');
+      set(sl ? sl.getAttribute('data-i') : null);
+    });
+    host.addEventListener('pointerleave', ()=>set(null));
+  }
+  let lit = false;
+  for(const el of host.querySelectorAll('.legend [data-i]')){
+    const on = el.getAttribute('data-i') === host.__hi;
+    el.classList.toggle('on', on);
+    lit = lit || on;
+  }
+  host.classList.toggle('hi', lit);
 }
 
 /** The pie as marks: the same slices `pie` draws, from the same fractions. */
@@ -594,21 +623,20 @@ function pie(rows, sum, what, label, fr){
   for(let i=0; i<rows.length; i++){
     const row = rows[i], frac = fr ? fr[i] : row.v/sum;
     if(!(frac > 1e-6)) continue;
-    const tip = `${row.k}: ${row.v.toLocaleString()} tokens (${(100*row.v/sum).toFixed(1)}%)`;
     if(frac >= 1-1e-12){
       // One entry holding everything: an arc whose ends coincide draws nothing.
-      s += `<circle cx="${c0}" cy="${c0}" r="${r}" fill="${row.fill}" class="mk"><title>${esc(tip)}</title></circle>`;
+      s += `<circle cx="${c0}" cy="${c0}" r="${r}" fill="${row.fill}" class="mk" data-i="${i}"/>`;
       break;
     }
     const b = a + frac*2*Math.PI;
     s += `<path d="M ${c0} ${c0} L ${(c0+r*Math.cos(a)).toFixed(2)} ${(c0+r*Math.sin(a)).toFixed(2)} `+
          `A ${r} ${r} 0 ${frac>0.5?1:0} 1 ${(c0+r*Math.cos(b)).toFixed(2)} ${(c0+r*Math.sin(b)).toFixed(2)} Z" `+
-         `fill="${row.fill}" stroke="var(--panel)" stroke-width="1" class="mk"><title>${esc(tip)}</title></path>`;
+         `fill="${row.fill}" stroke="var(--panel)" stroke-width="1" class="mk" data-i="${i}"/>`;
     a = b;
   }
   s += '</svg>';
-  const legend = rows.filter(r=>r.v/sum >= 0.0005).map(r=>
-    `<span><i style="background:${r.fill}"></i>${esc(r.k)} ${(100*r.v/sum).toFixed(1)}%</span>`).join('');
+  const legend = rows.map((r,i)=>r.v/sum < 0.0005 ? '' :
+    `<span data-i="${i}"><i style="background:${r.fill}"></i>${esc(r.k)} ${(100*r.v/sum).toFixed(1)}%</span>`).join('');
   return `<div class="row" style="gap:24px"><div class="pie">${s}</div>`+
     `<div class="legend" style="flex-direction:column;gap:6px">`+
     `<span><b>${big(sum)}</b>&nbsp;${what}</span>${legend}</div></div>`;
