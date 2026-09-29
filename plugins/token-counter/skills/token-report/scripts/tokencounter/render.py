@@ -60,7 +60,7 @@ CSS = """
   --c6:#22d3ee;--c7:#818cf8;--c8:#c084fc;--c9:#fb7185;--c10:#a3e635;--c11:#2dd4bf;
   --c12:#d6b45b;--c13:#94a3b8;
 }
-*{box-sizing:border-box}
+*,*::before,*::after{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 .wrap{max-width:1180px;margin:0 auto;padding:28px 16px 80px}
@@ -200,69 +200,143 @@ STYLE_CSS = r"""
   [data-style="matisse"] .mast{padding-top:40px;min-height:0}
   [data-style="matisse"] .kicker{max-width:64%}
   [data-style="matisse"] .tile .v{font-size:32px}}
-/* ---- 3. GHIBLI: a painted summer afternoon ------------------------------------------- */
-/* A hand-painted sky that fades to haze at the horizon, cumulus drifting across it, layered
-   meadow hills with a tree and a red-roofed house, and the report on warm watercolour paper.
-   The scenery is drawn here from scratch -- no character, logo or frame from any film. */
+/* ---- 3. GHIBLI: a background painted wet-into-wet, the report as a storyboard --------- */
+/* After the studio's own working methods.  The scene is painted the way Kazuo Oga paints a
+   background: soft washes laid wet, detail charged in as it dries, from a deliberately short
+   list of poster colours -- so edges bloom and the paper shows through, where Matisse's are
+   cut clean.  Wind moves the grass and carries leaves; light falls through leaves across the
+   page; the sky warms from midday to golden hour as the reader scrolls.  The report is the
+   production paperwork: each chart is a cut on an ekonte (storyboard) sheet -- CUT, picture,
+   ACTION, TIME -- and each headline number a chip on a colour-design card.  Everything is
+   drawn from scratch: no character, logo or frame from any film. */
 :root[data-style="ghibli"]{color-scheme:light;
-  --bg:#eef5ea;--panel:#fbf7ec;--line:#e2dccb;--fg:#26362f;--dim:#5b675f;
+  --bg:#e9f1e6;--panel:#fdfbf4;--line:#ddd6c6;--fg:#27302b;--dim:#5b645d;
   --cached:#bfdcea;--uncached:#246293;--out:#179d8e;--warn:#a84e49;--warn-bg:#f5e1d6;
   --c0:#246293;--c1:#a84e49;--c2:#179d8e;--c3:#b2861c;--c4:#0c6701;--c5:#d96c91;--c6:#1297cd;
   --c7:#733174;--c8:#8a6604;--c9:#7169cd;--c10:#974479;--c11:#4d882e;--c12:#3b6fc4;--c13:#8e8a7a;
-  --sky:#7fbfe0;--meadow:#74ad6a;--sun:#f3cf7a;--roof:#c4543c;
+  /* the poster colours the scene is mixed from */
+  --p-sky:#5ea5d6;--p-haze:#cfe6ee;--p-cloud:#fffaf0;--p-lav:#c7c1dc;--p-meadow:#7aa956;
+  --p-forest:#335f3a;--p-wheat:#e4c77e;--p-earth:#6b4f3a;--p-roof:#c4543c;--p-pencil:#3a3934;
   --title:"Hiragino Mincho ProN","Yu Mincho","YuMincho","Iowan Old Style","Palatino Linotype",
     Palatino,Georgia,serif;
-  --kicker:"Codex usage, recounted locally \00B7  under a summer sky"}
-[data-style="ghibli"] body{font:15px/1.6 "Nunito","Varela Round","Hiragino Maru Gothic ProN","Quicksand",
-  "Segoe UI","Trebuchet MS",system-ui,sans-serif;
-  background:linear-gradient(180deg,#6fb3db 0,#a7d6ea 38%,#dff0ee 72%,#eef5ea 100%) fixed #eef5ea}
-[data-style="ghibli"] .wrap{position:relative;z-index:1}
-[data-style="ghibli"] nav.bar{background:rgba(255,255,255,.5);border-bottom:1px solid rgba(255,255,255,.7);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
-[data-style="ghibli"] .brand{font:600 18px/1 var(--title);color:#1f3b4d;letter-spacing:.02em}
-[data-style="ghibli"] #stylebtn{background:var(--panel);border:1px solid rgba(36,98,147,.25);color:var(--fg);
-  box-shadow:0 4px 14px -6px rgba(30,70,90,.45)}
-[data-style="ghibli"] .keys{color:#1f3b4d}
-[data-style="ghibli"] .mast{padding:72px 0 44px;min-height:34vh}
-[data-style="ghibli"] .kicker{color:#1f3b4d;text-transform:none;letter-spacing:.06em;font-size:14px;
-  font-style:italic;opacity:.85}
-[data-style="ghibli"] .mast h1{font:600 clamp(42px,7.4vw,88px)/1.02 var(--title);color:#1b3446;
-  letter-spacing:.01em;margin:10px 0 16px;text-shadow:0 2px 18px rgba(255,255,255,.55)}
-[data-style="ghibli"] .dek{display:inline-block;color:#1f3b4d;background:rgba(251,247,236,.72);
-  padding:6px 14px;border-radius:999px;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
-[data-style="ghibli"] .tiles{gap:16px}
-[data-style="ghibli"] .tile{border:0;border-radius:16px;padding:16px 18px 16px;
-  background:linear-gradient(var(--wash,var(--sky)) 0 6px,var(--panel) 6px);
-  box-shadow:0 10px 28px -14px rgba(30,70,60,.45)}
-[data-style="ghibli"] .tile:nth-child(4n+2){--wash:var(--meadow)}
-[data-style="ghibli"] .tile:nth-child(4n+3){--wash:var(--sun)}
-[data-style="ghibli"] .tile:nth-child(4n+4){--wash:var(--roof)}
-[data-style="ghibli"] .tile .k{text-transform:none;letter-spacing:.02em;font-size:12.5px;font-weight:600}
-[data-style="ghibli"] .tile .v{font:600 32px/1.15 var(--title);margin-top:6px}
-[data-style="ghibli"] .panel{border:0;border-radius:18px;padding:18px 20px;margin-top:18px;
-  box-shadow:0 14px 34px -18px rgba(30,70,60,.5)}
+  --note:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --kicker:"a token-counter picture"}
+[data-style="ghibli"] body{font:15px/1.6 "Hiragino Maru Gothic ProN","Nunito","Varela Round","Segoe UI",
+  system-ui,sans-serif;background:linear-gradient(180deg,#4f9bd2 0,#8cc4e4 30%,#cfe6ee 58%,#e9f1e6 80%) fixed #e9f1e6}
+[data-style="ghibli"] .wrap{position:relative;z-index:1;counter-reset:cut chip}
+[data-style="ghibli"] nav.bar{background:transparent;border-bottom:0}
+[data-style="ghibli"] .brand{font:600 16px/1 var(--title);color:#fff;letter-spacing:.08em;
+  text-shadow:0 1px 8px rgba(20,60,90,.45)}
+[data-style="ghibli"] #stylebtn{background:rgba(255,255,255,.72);border:0;color:var(--fg);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+[data-style="ghibli"] .keys{color:#fff}
+/* The title card: centred, framed by two hairlines, credited like an opening title. */
+[data-style="ghibli"] .mast{text-align:center;padding:12vh 0 18vh;color:#fff;
+  text-shadow:0 2px 18px rgba(24,60,90,.55)}
+[data-style="ghibli"] .kicker{color:#fff;text-transform:none;letter-spacing:.32em;font:400 13px/1 var(--title)}
+[data-style="ghibli"] .mast h1{font:500 clamp(40px,7vw,84px)/1.1 var(--title);letter-spacing:.06em;
+  margin:22px auto 20px;padding:18px 0;max-width:15ch;border-top:1px solid rgba(255,255,255,.75);
+  border-bottom:1px solid rgba(255,255,255,.75)}
+[data-style="ghibli"] .dek{color:#fff;font:italic 15px/1.4 var(--note);letter-spacing:.04em}
+/* Colour-design cards: a gouache chip, its number, and the value it stands for. */
+[data-style="ghibli"] .tiles{gap:14px}
+[data-style="ghibli"] .tile{position:relative;counter-increment:chip;background:var(--panel);border:0;
+  border-radius:3px;padding:14px 14px 14px 66px;box-shadow:0 12px 30px -16px rgba(20,50,40,.55)}
+[data-style="ghibli"] .tile::before{content:"";position:absolute;left:12px;top:12px;bottom:26px;width:40px;
+  border-radius:46% 54% 40% 60%/12% 10% 14% 12%;background:var(--chip,var(--p-meadow));
+  box-shadow:inset 0 -8px 12px -6px rgba(0,0,0,.18),inset 0 6px 10px -6px rgba(255,255,255,.5)}
+[data-style="ghibli"] .tile::after{content:"G-" counter(chip,decimal-leading-zero);position:absolute;left:12px;
+  bottom:8px;width:40px;text-align:center;font:600 10px/1 var(--note);color:var(--dim);letter-spacing:.06em}
+[data-style="ghibli"] .tile:nth-child(6n+2){--chip:var(--p-sky)}
+[data-style="ghibli"] .tile:nth-child(6n+3){--chip:var(--p-wheat)}
+[data-style="ghibli"] .tile:nth-child(6n+4){--chip:var(--p-forest)}
+[data-style="ghibli"] .tile:nth-child(6n+5){--chip:var(--p-roof)}
+[data-style="ghibli"] .tile:nth-child(6n+6){--chip:var(--p-lav)}
+[data-style="ghibli"] .tile .k{text-transform:none;letter-spacing:.02em;font-size:12px;font-weight:600}
+[data-style="ghibli"] .tile .v{font:600 28px/1.15 var(--title);margin-top:4px}
+[data-style="ghibli"] .tile .n{font:italic 12.5px/1.4 var(--note)}
+/* Ekonte: a CUT column down the left, an ACTION line across the top, TIME kept by the page. */
+[data-style="ghibli"] .panel[data-cut]{position:relative;counter-increment:cut;background:var(--panel);
+  border:1.5px solid var(--p-pencil);border-radius:2px;padding:48px 20px 18px 84px;margin-top:22px;
+  box-shadow:0 20px 44px -26px rgba(20,50,40,.6)}
+[data-style="ghibli"] .panel[data-cut]::before{content:"CUT\A" counter(cut,decimal-leading-zero) "\A\A\A TIME\A" attr(data-time);
+  white-space:pre;position:absolute;left:0;top:0;bottom:0;width:64px;border-right:1.5px solid var(--p-pencil);
+  padding-top:52px;text-align:center;font:600 11px/1.5 var(--note);letter-spacing:.14em;color:var(--p-pencil)}
+[data-style="ghibli"] .panel[data-cut]::after{content:"ACTION \2014  " attr(data-cut);position:absolute;
+  left:64px;right:0;top:0;height:34px;border-bottom:1px solid var(--p-pencil);padding:8px 14px;
+  font:italic 13.5px/1.3 var(--note);color:var(--p-pencil);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 [data-style="ghibli"] .legend i{border-radius:50%}
-[data-style="ghibli"] .deco .gb{display:block}
-.gb{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
-.gb svg{position:absolute;display:block;overflow:visible}
-.gb-sun{position:absolute;right:-12vw;top:-18vh;width:70vw;height:70vw;max-width:900px;max-height:900px;
-  background:radial-gradient(closest-side,rgba(255,244,214,.95),rgba(255,236,190,.35) 45%,transparent)}
-.gb .puff{fill:#fff} .gb .shade{fill:#dfe5f1}
-.gb-c1{left:-4vw;top:12vh;width:min(46vw,560px);animation:drift 90s ease-in-out infinite alternate}
-.gb-c2{right:4vw;top:26vh;width:min(34vw,420px);animation:drift 120s ease-in-out -40s infinite alternate-reverse}
-.gb-c3{left:34vw;top:12vh;width:min(22vw,260px);opacity:.9;animation:drift 70s ease-in-out -20s infinite alternate}
-.gb-hills{left:0;bottom:0;width:100%;height:30vh}
-.gb-farm{right:6vw;bottom:14vh;width:min(22vw,240px)}
-.gb .far{fill:#a9cdb2} .gb .mid{fill:#7fb46f} .gb .near{fill:#5a9a4b}
-.gb .leaf{fill:#3f7a3a} .gb .leaf2{fill:#4f8c43} .gb .trunk{fill:#5b4331}
-.gb .wall{fill:#f4ead2} .gb .roof{fill:var(--roof)} .gb .win{fill:#35556b}
-@keyframes drift{from{transform:translateX(-3vw)}to{transform:translateX(6vw)}}
-@media(prefers-reduced-motion:reduce){.gb svg{animation:none}}
+[data-style="ghibli"] #rlchart path[fill-opacity]{fill:var(--p-haze);fill-opacity:.85}
 @media(max-width:640px){
-  .gb-c1{width:80vw;top:10vh} .gb-c2{width:60vw;top:30vh} .gb-c3{display:none}
-  .gb-farm{width:40vw;bottom:12vh}
-  [data-style="ghibli"] .mast{padding-top:44px;min-height:0}
-  [data-style="ghibli"] .tile .v{font-size:26px}}
+  [data-style="ghibli"] .panel[data-cut]{padding:44px 12px 14px 12px}
+  [data-style="ghibli"] .panel[data-cut]::before{content:"CUT " counter(cut,decimal-leading-zero);width:auto;
+    right:auto;bottom:auto;height:34px;padding:9px 10px;border-bottom:1px solid var(--p-pencil)}
+  [data-style="ghibli"] .panel[data-cut]::after{left:64px}
+  [data-style="ghibli"] .mast{padding:8vh 0 12vh}
+  [data-style="ghibli"] .tile .v{font-size:24px}}
+/* the scene: a WebGL painting behind everything, the cast drawn over it */
+[data-style="ghibli"] .mast{min-height:calc(100vh - 56px);display:flex;flex-direction:column;
+  justify-content:flex-start;padding-top:9vh}
+[data-style="ghibli"] .mast::after{content:"\2193  scroll to the storyboard";position:absolute;left:50%;bottom:3vh;
+  transform:translateX(-50%);font:italic 13px/1 var(--note);letter-spacing:.1em;color:#fff;opacity:.9;
+  text-shadow:0 1px 8px rgba(20,50,30,.6)}
+[data-style="ghibli"] #gh-gl{display:block}
+#gh-gl{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;display:none}
+[data-style="ghibli"] .deco .gh,[data-style="ghibli"] .deco .gh-top{display:block}
+.gh,.gh-top{position:fixed;inset:0;overflow:hidden;pointer-events:none}
+.gh{z-index:0} .gh-top{z-index:3}
+.gh svg{position:absolute;display:block;overflow:visible}
+/* Komorebi: light through leaves, dappling whatever it falls on -- the report included. */
+.gh-komorebi{position:absolute;inset:-20%;mix-blend-mode:soft-light;opacity:.5;
+  background:radial-gradient(60px 44px at 12% 30%,rgba(255,244,200,.9),transparent 70%),
+    radial-gradient(90px 60px at 30% 62%,rgba(255,244,200,.8),transparent 70%),
+    radial-gradient(50px 40px at 48% 18%,rgba(255,244,200,.9),transparent 70%),
+    radial-gradient(110px 70px at 66% 48%,rgba(255,244,200,.75),transparent 70%),
+    radial-gradient(70px 50px at 82% 76%,rgba(255,244,200,.85),transparent 70%),
+    radial-gradient(56px 40px at 90% 26%,rgba(255,244,200,.9),transparent 70%),
+    radial-gradient(80px 56px at 22% 88%,rgba(255,244,200,.8),transparent 70%);
+  animation:dapple 26s ease-in-out infinite alternate}
+@keyframes dapple{from{transform:translate(0,0)}to{transform:translate(4%,3%)}}
+.gh-grain{position:absolute;inset:0;width:100%;height:100%;opacity:.08;mix-blend-mode:multiply}
+
+/* Hana: a girl in a straw hat, watching the clouds with the wind at her back. */
+.gh-girl{right:max(6vw,calc(50vw - 600px));bottom:5vh;height:min(40vh,380px);width:auto}
+.gh-girl .ink{fill:#2c2a2a} .gh-girl .skin{fill:#f2d3b8} .gh-girl .hair{fill:#3b2a22}
+.gh-girl .straw{fill:#e6c47c} .gh-girl .band{fill:#c4543c} .gh-girl .dress{fill:#f4efe2}
+.gh-girl .dress2{fill:#e5ddc8} .gh-girl .shoe{fill:#6b3f2e} .gh-girl .sock{fill:#fff}
+.gh-girl .sway,.gh-girl .flut,.gh-girl .tail{transform-box:fill-box}
+.gh-girl .sway{transform-origin:50% 0;animation:hairwind 3.2s ease-in-out infinite}
+.gh-girl .flut{transform-origin:50% 0;animation:hemwind 2.6s ease-in-out infinite}
+.gh-girl .tail{transform-origin:0 50%;animation:ribbon 1.4s ease-in-out infinite}
+.gh-girl .tail.t2{animation-duration:1.1s;animation-delay:-.4s}
+.gh-girl .breath{transform-box:fill-box;transform-origin:50% 100%;animation:breath 4.5s ease-in-out infinite}
+@keyframes hairwind{0%,100%{transform:rotate(-2deg) skewX(-3deg)}50%{transform:rotate(-9deg) skewX(-8deg)}}
+@keyframes hemwind{0%,100%{transform:skewX(-4deg)}40%{transform:skewX(-11deg)}70%{transform:skewX(-6deg)}}
+@keyframes ribbon{0%,100%{transform:rotate(-4deg) scaleX(1)}50%{transform:rotate(9deg) scaleX(.86)}}
+@keyframes breath{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.012)}}
+
+/* Moss: a small round spirit of the meadow, hopping, stopping to look about, hopping back. */
+.gh-spirit{left:0;bottom:4vh;width:min(9vw,84px);animation:roam 22s linear infinite}
+.gh-spirit .bod{transform-box:fill-box;transform-origin:50% 100%;animation:hop .7s ease-in-out infinite}
+.gh-spirit .eye{transform-box:fill-box;transform-origin:50% 50%;animation:blink 4.2s steps(1) infinite}
+.gh-spirit .sprout{transform-box:fill-box;transform-origin:50% 100%;animation:sprout 1.4s ease-in-out infinite}
+@keyframes roam{0%{transform:translateX(8vw) scaleX(1)}38%{transform:translateX(38vw) scaleX(1)}
+  48%{transform:translateX(38vw) scaleX(1)}49%{transform:translateX(38vw) scaleX(-1)}
+  88%{transform:translateX(8vw) scaleX(-1)}98%{transform:translateX(8vw) scaleX(-1)}100%{transform:translateX(8vw) scaleX(1)}}
+@keyframes hop{0%,100%{transform:translateY(0) scale(1.06,.92)}20%{transform:translateY(0) scale(.94,1.06)}
+  50%{transform:translateY(-38%) scale(.97,1.03)}80%{transform:translateY(0) scale(1.04,.95)}}
+@keyframes blink{0%,94%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+@keyframes sprout{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(10deg)}}
+
+/* Birds crossing high up. */
+.gh-birds{left:-10vw;top:16vh;width:min(12vw,120px);animation:flyover 38s linear infinite}
+.gh-birds .w{transform-box:fill-box;transform-origin:50% 100%;animation:flap .5s ease-in-out infinite}
+.gh-birds .w:nth-child(2){animation-delay:-.2s} .gh-birds .w:nth-child(3){animation-delay:-.35s}
+.gh-birds path{fill:none;stroke:#2f3b45;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+@keyframes flyover{from{transform:translate(0,0)}to{transform:translate(125vw,-6vh)}}
+@keyframes flap{0%,100%{transform:scaleY(1)}50%{transform:scaleY(-.6)}}
+@media(max-width:640px){.gh-girl{height:30vh;right:4vw} .gh-spirit{width:14vw}}
+@media(prefers-reduced-motion:reduce){.gh *,.gh-komorebi{animation:none!important}}
 """
 
 JS = """
@@ -622,6 +696,16 @@ function redraw(){
   drawRL(tk);
   drawDaily(tk);
   schedulePies();
+  markTime();
+}
+
+// The span on screen, written onto each chart panel; a style can show it (Ghibli's
+// storyboard keeps it in the TIME column of every cut).
+function markTime(){
+  if(!VIEW || !document.querySelectorAll) return;
+  const sp = VIEW[1]-VIEW[0], d = Math.floor(sp/DAY), h = Math.round((sp - d*DAY)/HOUR);
+  const txt = d ? `${d}d ${h}h` : `${h}h`;
+  document.querySelectorAll('.panel[data-cut]').forEach(p=>p.setAttribute('data-time', txt));
 }
 
 /** Put `tAnchor` under `vxAnchor` at the given span, clamped to the domain. */
@@ -739,6 +823,135 @@ STYLE_JS = r"""
 const STYLES = D.styles || [['clinical','Clinical']];
 const ROOT = document.documentElement;
 
+// ---- Ghibli: the landscape, painted live -----------------------------------------------
+// One full-screen fragment shader, no library.  It paints the way a background painter works
+// -- the sky laid first as a wash, then cloud, far hills, a wood, the meadow -- each edge left
+// soft, and a little noise for the grain of poster colour on paper.  The wind is the one
+// thing that never stops: gusts sweep the meadow as lighter bands, blades lean with them, and
+// seeds blow across.  Scrolling carries the afternoon toward golden hour.  Rendered below
+// screen resolution on purpose: a wash does not need every pixel, and a laptop stays cool.
+const Paint = (()=>{
+  const cv = byId('gh-gl');
+  if(!cv || !cv.getContext) return null;
+  let gl = null, prog = null, raf = 0, t0 = 0, dusk = 0, want = 0;
+  const VS = 'attribute vec2 aP; varying vec2 vUv; void main(){ vUv = aP*.5+.5; gl_Position = vec4(aP,0.,1.); }';
+  const FS = `
+precision mediump float;
+varying vec2 vUv;
+uniform float uT, uDusk, uAsp;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.-2.*f);
+  return mix(mix(hash(i), hash(i+vec2(1.,0.)), u.x), mix(hash(i+vec2(0.,1.)), hash(i+vec2(1.,1.)), u.x), u.y); }
+float fbm(vec2 p){ float v = 0., a = .5; for(int i=0;i<5;i++){ v += a*noise(p); p = p*2.03+vec2(1.7,9.2); a *= .5; } return v; }
+float ridge(float x, float s, float amp){ return fbm(vec2(x+s, s*.37))*amp; }
+vec3 warm(vec3 c, float k){ return mix(c, c*vec3(1.12,.86,.7)+vec3(.06,.02,0.), k); }
+void main(){
+  vec2 uv = vUv, p = vec2(uv.x*uAsp, uv.y);
+  float t = uT;
+  // the sky: a wash from zenith to a hazy horizon, warming with the hour
+  vec3 zen = mix(vec3(.24,.55,.83), vec3(.33,.34,.58), uDusk);
+  vec3 hor = mix(vec3(.82,.91,.93), vec3(.99,.73,.48), uDusk);
+  vec3 col = mix(hor, zen, pow(clamp((uv.y-.22)/.78, 0., 1.), .75));
+  vec2 sp = vec2(.66*uAsp, mix(.84, .36, uDusk));
+  float sd = length(p-sp);
+  col += vec3(1.,.93,.76)*(exp(-sd*5.)*.5 + smoothstep(.055,.04,sd)*.55);
+  // towering cumulus: billowed noise in a band, lit from above, lavender underneath
+  // a portrait screen still gets a cloud or two: sample at least a landscape's width of sky
+  vec2 cp = vec2(uv.x*max(uAsp, 1.4), uv.y)*vec2(1.5,2.3) + vec2(t*.006, 0.);
+  float band = smoothstep(.34,.62,uv.y)*smoothstep(1.08,.7,uv.y);
+  float tower = .65 + .7*smoothstep(.35,.85, fbm(vec2(p.x*1.1 + t*.003, 4.)));
+  float d = (fbm(cp) + .35*fbm(cp*2.3+3.1))*band*tower;
+  float edge = smoothstep(.5, .6, d);
+  float lit = clamp((fbm(cp+vec2(0.,.06)) - fbm(cp-vec2(0.,.06)))*4. + .55 + (uv.y-.6), 0., 1.);
+  vec3 shade = mix(vec3(.72,.71,.86), vec3(.86,.62,.62), uDusk);
+  vec3 light = mix(vec3(1.,.99,.95), vec3(1.,.87,.68), uDusk);
+  col = mix(col, mix(shade, light, lit), edge*.97);
+  // far hills in aerial blue, a nearer range, then the wood
+  float h1 = .31 + ridge(p.x*.8, 3., .17);
+  col = mix(col, warm(vec3(.60,.73,.81), uDusk*.5), smoothstep(h1+.005, h1-.005, uv.y)*.85);
+  float h2 = .25 + ridge(p.x*1.4, 11., .1);
+  col = mix(col, warm(vec3(.47,.64,.60), uDusk*.5), smoothstep(h2+.004, h2-.004, uv.y));
+  float tl = .19 + ridge(p.x*5., 5., .07) + .012*noise(vec2(p.x*60., 1.));
+  vec3 wood = mix(vec3(.16,.31,.19), vec3(.31,.49,.28), fbm(p*vec2(22.,30.)) );
+  col = mix(col, warm(wood, uDusk*.6), smoothstep(tl+.006, tl-.006, uv.y));
+  // the meadow, and the wind in it
+  float mh = .145 + ridge(p.x*1.1, 21., .03);
+  if(uv.y < mh + .002){
+    float depth = clamp(uv.y/mh, 0., 1.);
+    vec3 g = mix(vec3(.30,.52,.24), vec3(.60,.75,.38), depth);
+    float gust = smoothstep(.5, .95, noise(vec2(p.x*2.2 - t*.45, uv.y*5. + t*.05)));
+    g = mix(g, vec3(.80,.87,.52), gust*.5);
+    float lean = (1.-depth)*(.6 + 1.6*gust)*sin(t*1.9 + p.x*4.);
+    float bx = p.x*(90. + 260.*depth) + lean*(1.-uv.y/mh)*3.;
+    float cell = fract(bx), hh = hash(vec2(floor(bx), 7.));
+    float top = mh*(.25 + .75*hh) - (1.-depth)*.0;
+    float blade = step(abs(cell-.5), .16*(1.-uv.y/top)) * step(uv.y, top) * (1.-depth);
+    g = mix(g, g*vec3(.72,.82,.7), blade*.8);
+    g = mix(g, vec3(.93,.95,.8), step(.985, hash(floor(p*vec2(240.,160.))))*(1.-depth)*.6);  // flowers
+    col = mix(col, warm(g, uDusk*.55), smoothstep(mh+.004, mh-.004, uv.y));
+  }
+  // seeds on the wind
+  for(int i=0;i<14;i++){
+    float fi = float(i), s = hash(vec2(fi, 3.1));
+    vec2 q = vec2(fract(s + t*(.018 + .02*hash(vec2(fi,8.)))) *1.3 - .15,
+                  .12 + .7*hash(vec2(fi,1.)) + .04*sin(t*.9 + fi));
+    q.x *= uAsp;
+    float r = length((p - q)*vec2(1., 1.6));
+    col = mix(col, vec3(1.,.98,.9), smoothstep(.0045, .0015, r)*.9);
+  }
+  // poster colour on paper: a little grain, the palette held in a few steps
+  col += (hash(uv*vec2(913.,577.)+fract(t*.01)) - .5)*.035;
+  col = floor(col*28. + .5)/28.;
+  gl_FragColor = vec4(col, 1.);
+}`;
+
+  function init(){
+    try{
+      gl = cv.getContext('webgl', {antialias:false, alpha:false, preserveDrawingBuffer:false});
+      if(!gl) return false;
+      const mk = (type, src)=>{ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+        if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+      prog = gl.createProgram();
+      gl.attachShader(prog, mk(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(prog);
+      if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+      const a = gl.getAttribLocation(prog, 'aP');
+      gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+      return true;
+    }catch(err){ console.warn('token-counter: scene off', err); gl = null; return false; }
+  }
+  function frame(now){
+    raf = requestAnimationFrame(frame);
+    if(document.hidden) return;
+    const k = .55;                                    // paint below screen resolution
+    const w = Math.round(innerWidth*k), h = Math.round(innerHeight*k);
+    if(cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; gl.viewport(0, 0, w, h); }
+    dusk += (want - dusk)*.06;
+    gl.uniform1f(gl.getUniformLocation(prog, 'uT'), REDUCE ? 20 : (now - t0)/1000);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uDusk'), dusk);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uAsp'), w/h);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if(REDUCE && Math.abs(want - dusk) < .002){ cancelAnimationFrame(raf); raf = 0; }
+  }
+  return {
+    start(){ if(!gl && !init()){ ROOT.classList.add('nogl'); return; }
+             if(!raf){ t0 = t0 || performance.now(); raf = requestAnimationFrame(frame); } },
+    stop(){ if(raf) cancelAnimationFrame(raf); raf = 0; },
+    hour(v){ want = v; if(gl && !raf && ROOT.getAttribute('data-style') === 'ghibli') raf = requestAnimationFrame(frame); },
+  };
+})();
+
+// The hour follows the scroll: midday at the title card, golden hour by the last cut.
+function onScroll(){
+  const max = Math.max(1, document.documentElement.scrollHeight - innerHeight);
+  const v = clamp(scrollY/max, 0, 1);
+  ROOT.style.setProperty('--dusk', v.toFixed(3));
+  if(Paint) Paint.hour(v);
+}
+
 let SI = 0;
 function applyStyle(i){
   SI = (i % STYLES.length + STYLES.length) % STYLES.length;
@@ -750,6 +963,7 @@ function applyStyle(i){
   if(btn) btn.title = 'Next: ' + STYLES[(SI+1)%STYLES.length][1] + '  (shift-click or [ for previous)';
   try{ localStorage.setItem('tc-style', id); }catch(_){}
   try{ history.replaceState(null, '', '#style=' + id); }catch(_){}
+  if(Paint){ if(id === 'ghibli') Paint.start(); else Paint.stop(); }
   if(VIEW){ measure(); redraw(); }
 }
 
@@ -771,6 +985,10 @@ function initStyles(){
   // report) falls back to the first rather than to nothing.
   const i = STYLES.findIndex(s=>s[0] === id);
   applyStyle(i >= 0 ? i : 0);
+  let st = 0;
+  addEventListener('scroll', ()=>{ if(!st) st = requestAnimationFrame(()=>{ st = 0; onScroll(); }); },
+                   {passive:true});
+  onScroll();
   const btn = byId('stylebtn');
   if(btn) btn.addEventListener('click', e=>cycle(e.shiftKey ? -1 : 1));
   document.addEventListener('keydown', e=>{
@@ -1061,58 +1279,70 @@ def _matisse():
             '</div>')
 
 
-# ---- the Ghibli scenery -------------------------------------------------------------------
-# Summer sky, cumulus and a hillside farm, drawn from scratch and from a fixed seed like the
-# Matisse collage: the same scene on every render, nothing fetched, hidden by CSS elsewhere.
+# ---- the Ghibli cast ----------------------------------------------------------------------
+# The landscape is painted live in WebGL (STYLE_JS); these are the characters in front of it,
+# drawn as vectors so they stay crisp and CSS can move their parts.  Both are original: a
+# girl in a straw hat seen from behind, and a round moss spirit with a leaf sprout -- in the
+# spirit of the studio's films, and deliberately not any character from them.
 
-def _cumulus(rng, cls, w=400, h=190):
-    """A cumulus: a heap of puffs, tallest in the middle, over a flat, shaded base."""
-    puffs, n = [], 9
-    for i in range(n):
-        x = 40 + (w - 80) * i / (n - 1) + rng.uniform(-12, 12)
-        mid = 1 - abs(i - (n - 1) / 2) / ((n - 1) / 2)          # 1 at the centre, 0 at the ends
-        r = 34 + 52 * mid + rng.uniform(-8, 10)
-        puffs.append((x, h - 40 - r * .55 - 18 * mid, r))
-    shade = ''.join(f'<circle class="shade" cx="{x:.1f}" cy="{y + 12:.1f}" r="{r:.1f}"/>' for x, y, r in puffs)
-    white = ''.join(f'<circle class="puff" cx="{x:.1f}" cy="{y:.1f}" r="{r:.1f}"/>' for x, y, r in puffs)
-    return (f'<svg class="{cls}" viewBox="0 0 {w} {h}" aria-hidden="true">'
-            # The white is trimmed a little higher than its shadow, so the flat base shows
-            # a lavender underside, the way a lit cumulus does.
-            f'<clipPath id="{cls}-lo"><rect x="-60" y="-200" width="{w + 120}" height="{h + 170}"/></clipPath>'
-            f'<clipPath id="{cls}-hi"><rect x="-60" y="-200" width="{w + 120}" height="{h + 158}"/></clipPath>'
-            f'<g clip-path="url(#{cls}-lo)">{shade}</g><g clip-path="url(#{cls}-hi)">{white}</g></svg>')
+_GIRL = (
+    '<svg class="gh-girl" viewBox="0 0 140 300" aria-hidden="true">'
+    # legs and shoes, planted
+    '<rect class="skin" x="55" y="212" width="9" height="62" rx="4"/>'
+    '<rect class="skin" x="74" y="212" width="9" height="62" rx="4"/>'
+    '<rect class="sock" x="54" y="262" width="11" height="12" rx="3"/>'
+    '<rect class="sock" x="73" y="262" width="11" height="12" rx="3"/>'
+    '<path class="shoe" d="M51 272h16v8q0 4-4 4h-10q-4 0-4-4z"/>'
+    '<path class="shoe" d="M71 272h16v8q0 4-4 4h-10q-4 0-4-4z"/>'
+    '<g class="breath">'
+    # the dress: a body, and a hem the wind pulls to the left
+    '<path class="dress" d="M50 118q19-8 38 0l6 52h-50z"/>'
+    '<g class="flut"><path class="dress" d="M44 166h50l14 58q-38 10-78 0z"/>'
+    '<path class="dress2" d="M44 166h50l3 12q-28 6-56 0z"/></g>'
+    # the right arm hangs; the left is raised to hold the hat on
+    '<path class="skin" d="M88 124q9 4 10 22l2 40q-1 5-6 4l-6-44z"/>'
+    '<path class="dress" d="M84 118q12 2 14 18l-12 4z"/>'
+    '<path class="skin" d="M52 126q-12-6-16-26q-2-12 6-22l7 3q-5 9-3 18q3 14 12 20z"/>'
+    '<path class="dress" d="M56 118q-12 0-14 14l12 6z"/>'
+    # hair, a bob blown to the left, and the nape
+    '<rect class="skin" x="63" y="96" width="13" height="18" rx="5"/>'
+    '<g class="sway"><path class="hair" d="M46 70q23-16 48 0q4 22-4 38q-10 6-22 6q-14 0-26-8q-6-18 4-36z"/>'
+    '<path class="hair" d="M44 84q-12 6-18 16q12-2 20-8z"/><path class="hair" d="M46 96q-14 8-22 20q14-4 24-12z"/></g>'
+    # the straw hat, its red band, and two ribbon tails streaming out behind
+    '<g class="tail"><path class="band" d="M92 64q18 0 34-10q-4 10-2 18q-16 2-32 0z"/></g>'
+    '<g class="tail t2"><path class="band" d="M92 68q16 6 30 4q-6 8-4 14q-14-4-26-10z"/></g>'
+    '<ellipse class="straw" cx="70" cy="66" rx="44" ry="12"/>'
+    '<path class="straw" d="M48 64q2-26 22-26t22 26z"/>'
+    '<path class="band" d="M48.6 60h42.8l.6 6h-44z"/>'
+    '<path class="skin" d="M42 76q-2-6 3-8t7 4z"/>'
+    '</g></svg>')
 
+_SPIRIT = (
+    '<svg class="gh-spirit" viewBox="0 0 80 80" aria-hidden="true"><g class="bod">'
+    '<g class="sprout"><path fill="#5f9447" d="M40 22q-2-10 6-16q6 8-4 16z"/>'
+    '<path fill="#7ab35a" d="M40 22q-4-8-12-8q2 8 12 8z"/></g>'
+    '<ellipse cx="40" cy="48" rx="26" ry="24" fill="#a9cf86"/>'
+    '<ellipse cx="34" cy="40" rx="10" ry="7" fill="#c6e3a6" opacity=".8"/>'
+    '<g class="eye"><ellipse cx="32" cy="48" rx="3.2" ry="4.2" fill="#23302a"/>'
+    '<ellipse cx="48" cy="48" rx="3.2" ry="4.2" fill="#23302a"/></g>'
+    '<ellipse cx="26" cy="56" rx="4" ry="2.4" fill="#e59a8c" opacity=".55"/>'
+    '<ellipse cx="54" cy="56" rx="4" ry="2.4" fill="#e59a8c" opacity=".55"/>'
+    '<ellipse cx="31" cy="72" rx="6" ry="3" fill="#86b267"/><ellipse cx="49" cy="72" rx="6" ry="3" fill="#86b267"/>'
+    '</g></svg>')
 
-def _ridge(rng, y, amp, cls, n=7):
-    """One hill line across the full width, closed down to the bottom edge."""
-    pts = [(-50, y)] + [(1000 * i / (n - 1), y - amp * rng.uniform(.3, 1)) for i in range(n)] + [(1050, y)]
-    d = f'M{pts[0][0]} {pts[0][1]:.1f}'
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-        mx = (x0 + x1) / 2
-        d += f'C{mx:.1f} {y0:.1f} {mx:.1f} {y1:.1f} {x1:.1f} {y1:.1f}'
-    return f'<path class="{cls}" d="{d}L1050 300L-50 300Z"/>'
-
-
-def _farm():
-    """A lone tree beside a small house with a red roof."""
-    canopy = ''.join(f'<circle class="{c}" cx="{x}" cy="{y}" r="{r}"/>' for c, x, y, r in (
-        ('leaf', 70, 70, 44), ('leaf', 40, 96, 34), ('leaf', 104, 94, 36), ('leaf2', 62, 50, 30),
-        ('leaf2', 92, 62, 28), ('leaf2', 50, 80, 22)))
-    return ('<svg class="gb-farm" viewBox="0 0 260 170" aria-hidden="true">'
-            '<rect class="trunk" x="64" y="104" width="12" height="52" rx="4"/>' + canopy +
-            '<rect class="wall" x="150" y="104" width="84" height="54" rx="2"/>'
-            '<path class="roof" d="M140 108L192 70L244 108Z"/>'
-            '<rect class="win" x="162" y="118" width="16" height="14" rx="2"/>'
-            '<rect class="win" x="204" y="118" width="16" height="30" rx="2"/></svg>')
+_BIRDS = ('<svg class="gh-birds" viewBox="0 0 120 50" aria-hidden="true">'
+          '<g class="w"><path d="M4 20q8-8 14 0q6-8 14 0"/></g>'
+          '<g class="w"><path d="M44 8q7-7 12 0q5-7 12 0"/></g>'
+          '<g class="w"><path d="M78 30q8-8 14 0q6-8 14 0"/></g></svg>')
 
 
 def _ghibli():
-    rng = random.Random(1986)
-    hills = ('<svg class="gb-hills" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">'
-             f'{_ridge(rng, 150, 70, "far")}{_ridge(rng, 200, 60, "mid")}{_ridge(rng, 252, 44, "near")}</svg>')
-    return ('<div class="gb"><div class="gb-sun"></div>'
-            f'{_cumulus(rng, "gb-c1")}{_cumulus(rng, "gb-c2")}{_cumulus(rng, "gb-c3", 300, 150)}'
-            f'{hills}{_farm()}</div>')
+    grain = ('<svg class="gh-grain" aria-hidden="true"><filter id="gh-paper">'
+             '<feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" stitchTiles="stitch"/>'
+             '<feColorMatrix type="saturate" values="0"/></filter>'
+             '<rect width="100%" height="100%" filter="url(#gh-paper)"/></svg>')
+    return (f'<div class="gh">{_BIRDS}{_SPIRIT}{_GIRL}</div>'
+            f'<div class="gh-top"><div class="gh-komorebi"></div>{grain}</div>')
 
 
 def render(model):
@@ -1166,7 +1396,7 @@ def render(model):
         rl_chart = (f'<div class="panel"><p class="sub">No rate-limit snapshots in range '
                     f'&mdash; {esc(rl.get("reason") or "none recorded")}.</p></div>')
     else:
-        rl_chart = f"""<div class="panel">
+        rl_chart = f"""<div class="panel" data-cut="Tokens pile up against each weekly limit">
   <div class="chart" id="rlchart"></div>
   <div class="legend">
     <span><i style="background:var(--uncached)"></i>cumulative tokens</span>
@@ -1216,6 +1446,7 @@ def render(model):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
+<canvas id="gh-gl" aria-hidden="true"></canvas>
 <div class="deco" aria-hidden="true">{_matisse()}{_ghibli()}<div class="wipe"></div></div>
 <nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button></div></nav>
 <div class="wrap">
@@ -1231,10 +1462,10 @@ def render(model):
 
 {rl_chart}
 
-<div class="panel"><div class="chart" id="dailychart">{_daily_svg(
+<div class="panel" data-cut="Input, day by day, by the model that took it"><div class="chart" id="dailychart">{_daily_svg(
     model['daily'], [m['model'] for m in model['models']], domain or [0, 1])}</div></div>
 
-<div class="panel pies"><div id="catpie"></div><div id="modelpie"></div></div>
+<div class="panel pies" data-cut="What filled the window, and who read it"><div id="catpie"></div><div id="modelpie"></div></div>
 
 </div>
 <script>window.__TC__ = {payload};</script>

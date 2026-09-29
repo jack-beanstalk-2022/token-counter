@@ -936,16 +936,25 @@ redrawn except to re-measure a panel whose width changed. **Matisse** is the lat
 white brush dashes, and an ink flower on a stem of cut leaves. Tiles are gouache cut-outs,
 each panel sits a few millimetres out of register over a coloured sheet, and pie slices are
 cut apart. The collage is inline SVG drawn in Python from a fixed seed — the same edges every
-time, nothing fetched — and hidden under every other style. **Ghibli** is a painted summer
-afternoon: a sky fading to haze at the horizon, a sun glow, cumulus with lavender undersides
-drifting slowly across it, layered meadow hills with a tree and a red-roofed house, and the
-report on warm watercolour paper, each tile topped with a wash of sky, meadow, sun or roof.
-Its scenery is drawn the same way and from scratch — no character, logo or frame from any
-film. Both palettes are
+time, nothing fetched — and hidden under every other style. **Ghibli** follows the studio's own working methods. The landscape is painted live by one
+WebGL fragment shader (no library), the way Kazuo Oga paints a background: a sky wash from
+zenith to hazy horizon, towering cumulus lit from above and lavender beneath, far hills in
+aerial blue, a wood, then the meadow, every edge left soft, a little grain, and the palette
+held to a few steps like a short list of poster colours. The wind never stops — gusts sweep
+the meadow as lighter bands, blades lean with them, seeds blow across — and scrolling carries
+the afternoon toward golden hour. It renders below screen resolution, pauses in a hidden tab,
+and a browser without WebGL keeps the CSS sky. In front of it stand two original characters
+drawn as vectors so CSS can animate their parts — a girl in a straw hat watching the clouds,
+hair, ribbon and hem in the wind, and a round moss spirit that hops through the grass — with
+birds crossing overhead; neither is, or is modelled on, any character from the films. The
+report itself is the production paperwork: each chart is a cut on an *ekonte* (storyboard)
+sheet, with CUT, ACTION and a TIME column that shows the span on screen, and each headline
+number a numbered chip on a colour-design card. The page opens on the whole scene as a title
+card and the cuts scroll up over it. Both palettes are
 checked for colour-vision separation against their own panels: neighbouring slots, and every
 pair among the first four. (Clinical's palette predates that check and does not pass it: its
 first two slots converge under deuteranopia.) `prefers-reduced-motion` stills the flower, the
-clouds and the switch's fade.
+wind, the characters and the switch's fade.
 
 ### 7.1 One time axis, one viewport
 
