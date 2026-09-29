@@ -938,7 +938,8 @@ API endpoint in `share.json` with mode 0600; the server keeps only its hash.
 ## 7. Report
 
 Single self-contained HTML, dark/light, no external requests — **151 KB** over a 22-day,
-2,081-file corpus, rendered in 1.9 ms. Charts are inline SVG; the interaction is ~300 lines
+2,081-file corpus, rendered in 1.9 ms, before the Nocturne scene's script, which adds about
+75 KB to every report whatever its corpus. Charts are inline SVG; the interaction is ~300 lines
 of vanilla JS over an embedded JSON blob. A test asserts the output contains no `http://` or
 `https://` reference at all.
 
@@ -957,11 +958,12 @@ Every figure derived from inference rather than measurement carries a visible `i
 badge; measurements carry a neutral `measured` badge. The page opens with a standing note
 that these are *recorded*, not billed, counts.
 
-**Styles.** The page carries two styles over one markup — **Clinical** (the original look,
-light or dark with the system, and the default) and **Matisse** — cycled by the dot at the
-top right of the bar or `[` / `]`. The dot carries no words or symbols: it is drawn in the
-style it switches *to* (a blue disc on a white ring for Clinical, a cobalt gouache cut-out
-over a sage sheet for Matisse), with fixed colours rather than the page's variables, and
+**Styles.** The page carries three styles over one markup — **Clinical** (the original look,
+light or dark with the system, and the default), **Matisse**, and **Nocturne**, a 3D scene
+(below) — cycled by the dot at the top right of the bar or `[` / `]`. The dot carries no words
+or symbols: it is drawn in the style it switches *to* (a blue disc on a white ring for
+Clinical, a cobalt gouache cut-out over a sage sheet for Matisse, a lit gold sphere on a
+night-blue ring for Nocturne), with fixed colours rather than the page's variables, and
 names that style only to assistive tech. Styles are remembered in `localStorage` and the URL hash (`#style=matisse`); a
 remembered style the page no longer carries falls back to the first. A style is CSS keyed on
 `html[data-style]`; every chart colour is a CSS variable, so the charts restyle without being
@@ -1011,6 +1013,61 @@ browser laid each one out and in its computed font, colour, spacing and case, an
 beneath stays in place, selectable and readable, just not painted. The simulation steps only
 while there is motion in the water and stops, flat, once it settles; `prefers-reduced-motion`
 makes none.
+
+**Nocturne: the report as a 3D scene.** Under Nocturne (`SCENE_STYLES` in `render.py`) the
+page is not painted at all. One canvas fills the window with a WebGL2 scene, and the page
+stays in place beneath it, unpainted and taking no pointer, so every number is still text for
+assistive tech. The scene is after Whistler's *Nocturnes* — the Thames at night in blue and
+gold, gas lamps doubled in still water, the falling sparks of *The Falling Rocket*: a hazy
+night sky over a still river, a far shore strung with lamps, and gold sparks drifting down.
+Nothing in it is 2D except words, which are drawn into textures and set in the scene.
+
+Each chart is an **exhibit**, a physical object on a plinth. The weekly windows are panes of
+glass, one a window, each cut to its cumulative curve and standing on edge along the time
+axis, with the curve as a lit edge; the reported percentage is a gold wire strung in front,
+in dashes as on the page, against its own axis; a rod marks each reset. The daily input is a
+skyline, one block a model a day, stacked, with a sliver of night between blocks. The two
+pies are medallions standing over round plinths, cut into slices of one thickness, so the
+angle stays the only measure. The headline numbers are words afloat over a slab, with the
+product's name cut into its edge. Dates, legends and value labels are set into the stone
+or float beside the solid, and every legend is complete, wrapping onto more lines rather
+than dropping an entry.
+
+**One exhibit stands in front; the rest hang in the sky.** The camera does not fly. It
+stands on the bank with its eye at the plinths' height, so the horizon runs behind the stone
+and the data is seen against the night. The exhibit in front hovers over the water as near
+as it can come while it stays on screen and under the sky's row, and square to the camera,
+so a height or an angle is read without foreshortening. Its whole reflection is in the
+water below. The others hang in a row in the sky (two rows on a portrait screen), turned
+toward the camera. **Clicking one brings it down**: it falls like a leaf, swinging side to
+side, and where it meets its place the water rings; the one it replaces rises back to the
+vacated slot like a released lantern, drifting wide of it. `←` / `→` and the digits do the
+same from the keyboard, and a polite live region names the exhibit brought forward.
+
+**The scene draws only what the page draws.** Every solid is built from the marks its chart
+recorded in `SCN` — the same shapes the WebGL layer paints — placed by the plot rectangle
+recorded with them, so a bar is exactly as tall, relative to the rest, as it is on the page.
+The time charts in front take the page's own gestures and move the **one shared viewport**:
+the wheel zooms, a drag pans, a pinch zooms on touch, a double-click returns to the full
+range, and the pies recompose in the scene as they do on the page. A drag anywhere else turns
+the camera a little around the exhibit in front, and a wheel moves it nearer or farther; a new
+exhibit brought forward resets both. Hovering a day or a window answers in words above the
+chart; hovering a slice slides it out and lights its legend line. On a portrait screen both
+time charts are built half as wide, as the page's own charts keep their height and give up
+width on a phone.
+
+Nocturne's categorical palette was chosen with the validator (`validate_palette.js`, dark
+mode, against the plinth `#10202a`): all thirteen slots inside the dark lightness band and
+over the chroma floor, neighbours clear of the colour-vision floor (worst ΔE 9.7) and the
+normal-vision floor (22.5), every pair among the first four as well (9.7 and 19.2), and each
+at 3:1 or more. It leads with gold and blue, the two colours of the Nocturnes. The style
+switch in the corner is drawn by the scene too: the next style's dot as a small coin that rocks
+and turns over under the pointer, with the real button over it for the click and the keyboard.
+
+No WebGL2, a context lost, or a shader that will not compile, and `data-s3d` comes off the
+root: the page is painted again in Nocturne's own 2D sheet, dark blue and gold.
+`prefers-reduced-motion` stills the scene: exhibits arrive at once, the water is flat, no
+sparks fall, and nothing is drawn between changes.
 
 ### 7.1 One time axis, one viewport
 
@@ -1078,7 +1135,13 @@ What the renderer owns and what the page owns:
 npm, no browser — and asserts what Python cannot see: that both charts emit identical ticks,
 that a day bar starts where the limit chart puts that instant, that zooming moves x and
 leaves the value axis alone, that dragging moves the range by the distance dragged, that the
-viewport cannot leave its domain, and that the pie recomposes with it.
+viewport cannot leave its domain, and that the pie recomposes with it. The Nocturne scene's
+runtime needs WebGL2 and stays out of the stub, but its pure half (`N3`) is checked against
+the same marks: one pane of glass a window, as tall as its curve; the gold wire reaching the
+reported peak; one block a stacked segment, the tallest where its bar stands; slices that
+close the circle and a pointer that names the slice under it; an exhibit in front that fits
+the screen square to it, landscape and portrait; sky slots that never overlap; and a flight
+that starts and ends exactly where it should.
 
 ---
 
@@ -1410,8 +1473,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
 | `scripts/test_mutations.py` | **17/17** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **142/142** across tokenizer, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer, and the shared time axis the three charts are drawn on |
-| `node scripts/test_page.js` | **21/21** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, and the pie recomposing with the range |
+| `scripts/test_pipeline.py` | **149/149** across tokenizer, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
+| `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |
 | `scripts/diag_fork.py` | the known fork pair matches for exactly **37 records at parent index 95** — an independent witness for the §2.5 rule |
