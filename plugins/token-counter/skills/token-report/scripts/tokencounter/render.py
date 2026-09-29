@@ -806,7 +806,7 @@ const FXS = (D.fx && D.fx.length) ? D.fx : [['none', 'None', false, 'vec4 fx(vec
 //   refract   CSS px the panel is displaced under a fully tilted surface
 //   disp      chromatic split, as a fraction of the displacement
 //   light     crest and trough lighting; 0 leaves only the refraction
-const WAVE = {cell: 6, brush: 24, substeps: 2, damp: .984, visc: .0155, push: 1/45, v0: .3,
+const WAVE = {cell: 6, brush: 24, substeps: 2, damp: .955, visc: .0155, push: 1/45, v0: .3,
               slope: 22, refract: 36, disp: .25, light: 0};
 const GLX = (()=>{
   if(typeof document === 'undefined' || !document.createElement || !document.querySelectorAll
