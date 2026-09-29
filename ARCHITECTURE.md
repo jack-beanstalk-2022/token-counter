@@ -942,6 +942,40 @@ pair among the first four. (Clinical's palette predates that check and does not 
 first two slots converge under deuteranopia.) `prefers-reduced-motion` stills the flower and
 the switch's fade.
 
+**The WebGL layer.** Under Clinical (`GL_STYLES` in `render.py`) the chart *marks* — the
+limit chart's area and curves, the daily bars, the pie slices — are painted by WebGL2, so
+effects can be applied to them. Every chart, in every style, records what it drew as plain
+shapes in its SVG's own units (`SCN`: areas, polylines with optional dashes, rects, pies,
+colours as CSS variable names). The layer puts one canvas behind each panel's content, reads
+the shapes, and draws them into a 4× multisampled buffer that is resolved to a texture and
+put on screen through **one post pass, the effect**. The SVG is not replaced: it still
+draws the grid, the axes, every label and every tooltip, and its marks stay in place with
+zero opacity so hover titles keep answering the pointer. The layer draws in the same task as
+the SVG it replaces (a microtask, not the next frame), so axes and marks never part during a
+drag; colours are read from the style's own variables, so light and dark follow the system.
+
+An effect is an entry in `FX`: an id, a label, whether it animates, and a GLSL ES 3.00 body
+defining `vec4 fx(vec2 uv)` over `scene(uv)` (the panel's marks, premultiplied) with
+`u_res`, `u_dpr` and `u_time` in scope. Adding one needs no other change. The first entry,
+`none`, is the plain Clinical page and the default; the page ships `glow`, `scan` and an
+animated `sheen` as examples, cycled by the **FX** button (shown only while the layer is
+running) and remembered in `localStorage`. An animated effect redraws only on-screen panels
+and never runs under `prefers-reduced-motion`; an effect that fails to compile is reported
+in the console and drawn as `none`. No WebGL2, a failed context, a lost context, or any
+other style: `data-gl` comes off the root and the SVG marks are simply visible again.
+
+**Water.** Under whichever effect is chosen, the page is seen through water. A pointer moving
+fast (over ~1.4 px/ms; not a touch, not a drag of the charts) drops ripples along its path,
+stronger the faster it went, up to 16 alive at once for 2.6 s each. The post pass bends where
+the effect samples the panel by the sum of the ripples, packets of waves on expanding rings,
+and lights their crests and shades their troughs faintly so a ring shows over empty paper
+too. Ripples are kept in page coordinates and handed to every canvas in its own pixels, so
+one ring crosses the tiles and the charts as a single surface. The headline tiles join the
+layer for this: their text is drawn into a texture glyph by glyph, where the browser laid
+each one out and in its computed font, colour, spacing and case, and the text beneath stays
+in place, selectable and readable, just not painted. Frames run only while a ripple is alive;
+`prefers-reduced-motion` makes none.
+
 ### 7.1 One time axis, one viewport
 
 Charts 2 and 3 answer different questions about the same hours, and are only useful together

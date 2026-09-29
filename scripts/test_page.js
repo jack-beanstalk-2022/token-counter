@@ -127,6 +127,10 @@ check('both charts draw the same ticks at the same x',
       t1.length >= 2 && JSON.stringify(t1) === JSON.stringify(t2),
       JSON.stringify([t1, t2]));
 
+check('the daily chart has tick labels but no vertical guides; the limit chart keeps its guides',
+      !/<line/.test(ax.innerHTML) && /stroke-dasharray="2 4"/.test(rlHost.innerHTML),
+      ax.innerHTML.slice(0, 120));
+
 // 2. the same instant lands on the same x in both charts
 const a0 = +bars[0].getAttribute('data-a');
 const xOfDay = +transforms()[0].match(/translate\(([-\d.]+),/)[1];
@@ -151,6 +155,23 @@ check('a model keeps its daily-chart colour in the pie',
       !!firstModel && barHasC0
       && modelHost.innerHTML.includes(`background:var(--c0)"></i>${firstModel} `),
       `${firstModel} barHasC0=${barHasC0}`);
+
+// 2b. the WebGL layer's marks are the SVG's marks: a GL style draws exactly what SVG did
+const scn = host => run('SCN').get(host);
+const rlMarks = scn(rlHost), dMarks = scn(dailyHost), pMarks = scn(pieHost);
+check('the limit chart records its marks for the WebGL layer, clipped to the plot',
+      !!rlMarks && rlMarks.list.some(m => m.t === 'area') && rlMarks.list.some(m => m.t === 'line')
+      && JSON.stringify(rlMarks.clip) === JSON.stringify([L, 0, W - L - RM, 300]),
+      JSON.stringify(rlMarks && rlMarks.clip));
+const firstRect = dMarks && dMarks.list.find(m => m.t === 'rect');
+check('the daily chart records its marks, and none outside the plot',
+      !!dMarks && dMarks.list.every(m => m.x + m.w >= L && m.x <= W - RM),
+      JSON.stringify(firstRect));
+const slices = pMarks && pMarks.list[0].slices;
+check('the pie records one slice per row, summing to the whole circle',
+      !!slices && Math.abs(slices.reduce((a, s) => a + s[0], 0) - 1) < 1e-9
+      && slices.every(s => /^--c\d+$/.test(s[1])), JSON.stringify(slices));
+check('without WebGL2 the layer stays out of the way', run('GLX') === null, String(run('GLX')));
 
 // 3. zoom: horizontal only, both charts, pie included
 const before = { rl: rlHost.innerHTML, bars: transforms() };

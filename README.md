@@ -110,7 +110,7 @@ machine you are on.
 ```
 python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock o200k_base
 python scripts/test_ledger.py            # 13 response-identity regressions
-python scripts/test_pipeline.py          # 142 pipeline assertions
+python scripts/test_pipeline.py          # 146 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
 python scripts/bench.py                  # the parallelism grid
 python scripts/verify_schema.py          # schema claims against the live corpus,
