@@ -926,19 +926,21 @@ Every figure derived from inference rather than measurement carries a visible `i
 badge; measurements carry a neutral `measured` badge. The page opens with a standing note
 that these are *recorded*, not billed, counts.
 
-**Styles.** The page carries nine styles over one markup — Brutal, Phosphor, Broadsheet,
-Swiss, Blueprint, Outrun, Tokenopolis, Nebula and Clinical (the original look) — cycled by the
-button in the top bar or `[` / `]`, and remembered in `localStorage` and the URL hash
-(`#style=city`). A style is CSS keyed on `html[data-style]`; every chart colour is a CSS
-variable, so the charts restyle without being redrawn except to re-measure a panel whose width
-changed. Two styles light a WebGL scene behind glass panels, built from the payload the charts
-already carry and nothing else: **Tokenopolis** raises one tower per day on a week-by-weekday
-grid, stacked by model in the daily chart's colours; **Nebula** winds one spiral arm per
-content category in the pie's colours, with time running outward from the core and star count
-growing with the log of each hour's tokens. Both read the shared `VIEW`: whatever the time
-charts have in range is lit and the rest dims, so panning a chart scans the scene. No library,
-no fonts, no network — the shaders and matrix math are inline, and a browser without WebGL
-keeps the style and says the scene is off. `prefers-reduced-motion` stills every animation.
+**Styles.** The page carries two styles over one markup — **Clinical** (the original look,
+light or dark with the system, and the default) and **Matisse** — cycled by the button in the
+top bar or `[` / `]`, and remembered in `localStorage` and the URL hash (`#style=matisse`); a
+remembered style the page no longer carries falls back to the first. A style is CSS keyed on
+`html[data-style]`; every chart colour is a CSS variable, so the charts restyle without being
+redrawn except to re-measure a panel whose width changed. **Matisse** is the late cut-outs,
+*papiers découpés*: cream paper, a torn sage sheet and a dusty-rose one pinned behind the page,
+white brush dashes, and an ink flower on a stem of cut leaves. Tiles are gouache cut-outs,
+each panel sits a few millimetres out of register over a coloured sheet, and pie slices are
+cut apart. The collage is inline SVG drawn in Python from a fixed seed — the same edges every
+time, nothing fetched — and hidden under every other style. Its categorical palette is
+checked for colour-vision separation against its own panel: neighbouring slots, and every
+pair among the first four. (Clinical's palette predates that check and does not pass it: its
+first two slots converge under deuteranopia.) `prefers-reduced-motion` stills the flower and
+the switch's fade.
 
 ### 7.1 One time axis, one viewport
 
@@ -959,10 +961,20 @@ Chart 4 has no time axis of its own, so it follows the viewport by filtering. To
 content is deduplicated **per rollout file** (§3.3), which makes the file the finest unit its
 categories can honestly be placed on: `analyze` buckets each file's categories at the hour
 the file opened (`CAT_BUCKET_S`), and a bucket counts when it overlaps the visible range.
-Zooming inside one file's hour therefore does not subdivide it — the pie stops resolving
-before the time charts do, and the caption says where the content is placed. That series is
+Zooming inside one file's hour therefore does not subdivide it, and a view much narrower than
+a day mostly shows the gaps between sessions — so **zoom stops at one day**, the unit the daily
+chart is drawn in. A range with nothing in it (an idle day) keeps the pie's place as a hollow
+ring and says why, rather than collapsing the panel. That series is
 36% of the page's bytes, which is the price of a composition chart that answers *for the week
 on screen* rather than for the corpus.
+
+The pies follow a beat behind. A drag or a zoom redraws the time charts on every frame, and
+recomposing two pies at that rate reads as flicker, so they wait until the viewport has been
+still for 180 ms and then turn from the slices they show to the new ones over about half a
+second. Each pie draws the same keys in the same order every time, zero-valued ones included,
+so a slice grows from nothing or shrinks away instead of jumping; a move during a turn starts
+the next one from where it had got to. The legend reads the new shares at once. This is in
+every style, and `prefers-reduced-motion` skips the turn.
 
 What the renderer owns and what the page owns:
 

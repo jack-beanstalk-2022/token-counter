@@ -71,10 +71,14 @@ const modelHost = node();
 const els = { rlchart: rlHost, dailychart: dailyHost, catpie: pieHost, modelpie: modelHost };
 
 const raf = [];
+const timers = new Map();                  // id -> fn; run by flush(), never by the clock
+let timerId = 0;
 const ctx = {
   console,
   requestAnimationFrame(fn) { raf.push(fn); return raf.length; },
-  clearTimeout() {}, setTimeout() {}, addEventListener() {},
+  setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
+  clearTimeout(id) { timers.delete(id); },
+  addEventListener() {},
   document: {
     getElementById: id => els[id] || null,
     querySelector: sel => (sel === '.chart' ? rlHost : null),
@@ -86,7 +90,17 @@ vm.createContext(ctx);
 scripts.forEach(s => vm.runInContext(s, ctx));
 
 const run = code => vm.runInContext(code, ctx);
-const flush = () => { while (raf.length) raf.shift()(); };
+const frames = () => { while (raf.length) raf.shift()(); };
+// Frames, then whatever they left waiting (the pies' debounce), until nothing is pending.
+const flush = () => {
+  for (;;) {
+    frames();
+    if (!timers.size) return;
+    const [id, fn] = timers.entries().next().value;
+    timers.delete(id);
+    fn();
+  }
+};
 
 let bad = 0;
 const check = (name, ok, detail) => {
@@ -158,6 +172,12 @@ check('the day bars got wider, not taller',
       && !/scale\([\d.]+,[^1]/.test(transforms()[0]), transforms()[0]);
 const emptyPie = pieHost.innerHTML;
 run(`setSpan((DOM[1]-DOM[0])/8, DOM[0], L)`);            // over the content, not a quiet gap
+frames();
+check('the pies wait while the viewport is still moving',
+      pieHost.innerHTML === emptyPie && timers.size === 1, `${timers.size} timer(s) pending`);
+run('panPx(-1)'); frames(); run('panPx(1)'); frames();
+check('each move restarts the wait rather than stacking another', timers.size === 1,
+      `${timers.size} timer(s) pending`);
 flush();
 check('the pie recomposes for the visible range',
       !!pieTotal() && pieTotal() !== fullPie && emptyPie !== pieHost.innerHTML,
@@ -186,8 +206,9 @@ run('panPx(1e9)'); flush();
 check('panning stops at the start of the range', Math.abs(run('VIEW')[0] - DOM[0]) < 1,
       String(run('VIEW')));
 run('setSpan(1, VIEW[0], L)'); flush();
-check('zoom has a floor',
-      Math.abs((run('VIEW')[1] - run('VIEW')[0]) - run('MIN_SPAN')) < 1, String(run('VIEW')));
+check('zoom stops at one day, the finest range the content pie resolves',
+      run('MIN_SPAN') === 86400
+      && Math.abs((run('VIEW')[1] - run('VIEW')[0]) - 86400) < 1, String(run('VIEW')));
 run('setSpan(1e12, VIEW[0], L)'); flush();
 check('zooming out stops at the full range',
       Math.abs(run('VIEW')[0] - DOM[0]) < 1 && Math.abs(run('VIEW')[1] - DOM[1]) < 1,
@@ -198,7 +219,7 @@ check('the model pie is whole again at full extent', modelTotal() === fullModel,
       `${modelTotal()} vs ${fullModel}`);
 
 // 6. a window with nothing in it says so, rather than drawing an empty pie
-run('VIEW = [DOM[0], DOM[0]+600]'); run('redraw()');
+run('VIEW = [DOM[0], DOM[0]+600]'); run('redraw()'); flush();
 check('an empty slice is explained, not left blank',
       /No tokenized content in the visible range|<b>/.test(pieHost.innerHTML),
       pieHost.innerHTML.slice(0, 160));

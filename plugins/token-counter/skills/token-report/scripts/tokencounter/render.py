@@ -4,10 +4,9 @@ No CDN, no network, no external fonts: the file is opened from disk and must ren
 the machine offline.  Charts are inline SVG; interaction is a few hundred lines of vanilla
 JS over an embedded JSON blob.
 
-The page ships nine styles over one markup (STYLES), cycled by a button in the top bar or the
-`[` / `]` keys and remembered per browser.  Two of them draw a WebGL scene behind the panels
-from the same payload the charts read -- a city of daily towers and a spiral of content
-categories -- with no library: the shaders and the matrix math are inline below.
+The page ships its styles over one markup (STYLES), cycled by a button in the top bar or the
+`[` / `]` keys and remembered per browser.  A style never changes what the charts draw, only
+the colours, type and paper they are drawn on.
 
 The three charts share **one time axis and one viewport**.  The limit chart and the daily
 chart are drawn over the same domain with the same margins, so a moment sits at the same x
@@ -20,7 +19,9 @@ Every figure derived from inference rather than measurement carries a visible ma
 """
 import html
 import json
+import math
 import os
+import random
 import time
 
 # One geometry for every time chart.  The page re-derives the width from the panel at run
@@ -32,9 +33,7 @@ DAILY_H, DAILY_T, DAILY_B = 210, 18, 34
 
 # The page styles, in the order the button cycles them; the first is the default.  The page
 # reads this list from its payload, so it is written down once.
-STYLES = [('brutal', 'Brutal'), ('phosphor', 'Phosphor'), ('broadsheet', 'Broadsheet'),
-          ('swiss', 'Swiss'), ('blueprint', 'Blueprint'), ('outrun', 'Outrun'),
-          ('city', 'Tokenopolis'), ('galaxy', 'Nebula'), ('clinical', 'Clinical')]
+STYLES = [('clinical', 'Clinical'), ('matisse', 'Matisse')]
 
 CSS = """
 :root{
@@ -88,13 +87,17 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 @media(max-width:640px){.wrap{padding:18px 12px 60px} .tile .v{font-size:19px}}
 """
 
-# Nine opinions about one page.  Every style is CSS over the same markup, keyed on
-# `html[data-style]`; two of them ("city", "galaxy") also light a WebGL scene behind the
-# panels, built from the same payload the charts read.  Nothing here is fetched: fonts are
-# whatever the machine has, and every stack ends in a generic family.
+# The page's styles.  Every style is CSS over the same markup, keyed on `html[data-style]`,
+# and every chart colour is a variable, so a style restyles the charts without redrawing
+# them.  Nothing here is fetched: fonts are whatever the machine has, and every stack ends in
+# a generic family.  Matisse's categorical palette (--c0..--c12, with --c13 a neutral for
+# `other`) is checked for colour-vision separation against its own panel: neighbouring slots,
+# and every pair among the first four, which is as many models as most corpora have.
+# Clinical's predates that check and does not pass it (--c0 and --c1 converge under
+# deuteranopia).
 STYLE_CSS = r"""
-/* ---- shared chrome: the style bar, the masthead, the decorations --------------------- */
-:root{--sky:#0f1115;--kicker:"Codex usage, recounted locally"}
+/* ---- shared chrome: the style bar, the masthead, the switch ---------------------------- */
+:root{--kicker:"Codex usage, recounted locally"}
 .bar{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;
   gap:12px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line)}
 .brand{font-weight:700;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -112,275 +115,91 @@ STYLE_CSS = r"""
 .kicker::before{content:var(--kicker)}
 .mast h1{margin:4px 0 6px;font-size:30px;line-height:1.05;letter-spacing:-.01em}
 .dek{margin:0;color:var(--dim)}
-.caption,.tblock{display:none}
-#stage{position:fixed;inset:0;width:100%;height:100%;display:none;z-index:0;pointer-events:none}
 .deco>*{display:none}
-.wrap,.bar{position:relative;z-index:1}
-.bar{position:sticky}
-.wipe{position:fixed;inset:0;z-index:60;pointer-events:none;
-  background:repeating-linear-gradient(115deg,var(--fg) 0 28px,var(--uncached) 28px 56px)}
-.wipe.go{display:block;animation:wipe .56s cubic-bezier(.7,0,.3,1) forwards}
-@keyframes wipe{0%{clip-path:inset(0 100% 0 0)}45%,55%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 0 0 100%)}}
+/* The switch fades through the page background rather than cutting. */
+.wipe{position:fixed;inset:0;z-index:60;pointer-events:none;background:var(--bg)}
+.wipe.go{display:block;animation:wipe .56s ease-in-out forwards}
+@keyframes wipe{0%{opacity:0}45%,55%{opacity:1}100%{opacity:0}}
 @media(max-width:640px){#stylebtn .sw-l,.keys{display:none} .brand{font-size:13px}}
 
-/* ---- 1. BRUTAL: hard edges, primary ink, nothing rounded ----------------------------- */
-:root[data-style="brutal"]{
-  --bg:#f3efe6;--panel:#ffffff;--line:#000000;--fg:#000000;--dim:#333333;
-  --cached:#9ad0ff;--uncached:#0047ff;--out:#00c853;--warn:#ff2e00;--warn-bg:#ffe500;
-  --c0:#0047ff;--c1:#ff2e88;--c2:#ffb800;--c3:#00b37e;--c4:#7a00ff;--c5:#ff5a00;--c6:#00a3c4;
-  --c7:#1a1a1a;--c8:#b0005a;--c9:#6b8f00;--c10:#ff8fb1;--c11:#4d4dff;--c12:#8c6d00;--c13:#777777;
-  --kicker:"Raw numbers. No rounded corners."}
-[data-style="brutal"] body{font:15px/1.45 "Courier New",Courier,monospace}
-[data-style="brutal"] .bar{background:#ffe500;border-bottom:4px solid #000}
-[data-style="brutal"] .brand{font:900 18px/1 "Arial Black",Impact,sans-serif;text-transform:uppercase}
-[data-style="brutal"] #stylebtn{border:3px solid #000;border-radius:0;background:#000;color:#ffe500;
-  box-shadow:5px 5px 0 #ff2e88;font-weight:700;text-transform:uppercase}
-[data-style="brutal"] #stylebtn:active{transform:translate(5px,5px);box-shadow:none}
-[data-style="brutal"] .kicker{display:inline-block;background:#000;color:#fff;padding:5px 12px;
-  font-weight:700;transform:rotate(-2deg);letter-spacing:.04em}
-[data-style="brutal"] .mast h1{font:900 clamp(46px,11vw,132px)/.84 "Arial Black",Impact,sans-serif;
-  text-transform:uppercase;letter-spacing:-.05em;margin:18px 0 12px;text-shadow:7px 7px 0 #ff2e88}
-[data-style="brutal"] .dek{color:#000;font-weight:700;background:#fff;display:inline-block;
-  border:3px solid #000;padding:4px 10px}
-[data-style="brutal"] .tiles{gap:18px;margin-top:28px}
-[data-style="brutal"] .tile,[data-style="brutal"] .panel{border:3px solid #000;border-radius:0;
-  box-shadow:8px 8px 0 #000}
-[data-style="brutal"] .tile{transition:transform .08s,box-shadow .08s;animation:slam .42s both cubic-bezier(.2,1.6,.4,1)}
-[data-style="brutal"] .tile:hover{transform:translate(-4px,-4px);box-shadow:12px 12px 0 #000}
-[data-style="brutal"] .tile:nth-child(4n+1){background:#ffe500}
-[data-style="brutal"] .tile:nth-child(4n+2){background:#ff9ccf}
-[data-style="brutal"] .tile:nth-child(4n+3){background:#7df9ff}
-[data-style="brutal"] .tile:nth-child(4n+4){background:#b6ff5c}
-[data-style="brutal"] .tile:nth-child(2){animation-delay:.05s}
-[data-style="brutal"] .tile:nth-child(3){animation-delay:.1s}
-[data-style="brutal"] .tile:nth-child(4){animation-delay:.15s}
-[data-style="brutal"] .tile:nth-child(5){animation-delay:.2s}
-[data-style="brutal"] .tile:nth-child(6){animation-delay:.25s}
-[data-style="brutal"] .tile .k{color:#000;font-weight:700}
-[data-style="brutal"] .tile .n{color:#000}
-[data-style="brutal"] .tile .v{font:900 38px/1.05 "Arial Black",Impact,sans-serif;letter-spacing:-.03em}
-[data-style="brutal"] .panel{margin-top:28px}
-[data-style="brutal"] .legend{color:#000}
-@keyframes slam{0%{transform:translateY(-40px) rotate(-4deg);opacity:0}100%{transform:none;opacity:1}}
+/* ---- 1. CLINICAL: the base sheet above, light or dark with the system ----------------- */
 
-/* ---- 2. PHOSPHOR: a green CRT, scanlines and all ------------------------------------- */
-:root[data-style="phosphor"]{
-  --bg:#020a04;--panel:rgba(0,40,12,.35);--line:#11622b;--fg:#39ff7a;--dim:#22b457;
-  --cached:#0e6b2e;--uncached:#39ff7a;--out:#ffcc33;--warn:#ffb000;--warn-bg:#2a1d00;
-  --c0:#39ff7a;--c1:#ffb000;--c2:#00e5ff;--c3:#b8ff3d;--c4:#ff6a3d;--c5:#1f9e4a;--c6:#ffe066;
-  --c7:#6affc1;--c8:#c08a00;--c9:#9dff9d;--c10:#0bbf8a;--c11:#ffd29d;--c12:#5c8a2e;--c13:#2f6b3f;
-  --kicker:"> codex-tokens --report --since=epoch"}
-[data-style="phosphor"] body{font:14px/1.55 Consolas,"Lucida Console",Menlo,monospace;
-  text-shadow:0 0 5px rgba(57,255,122,.55);
-  background:radial-gradient(ellipse at 50% 40%,#073516 0%,#020a04 72%) fixed}
-[data-style="phosphor"] .scan{display:block;position:fixed;inset:0;pointer-events:none;z-index:30;
-  background:repeating-linear-gradient(to bottom,rgba(0,0,0,.32) 0 1px,transparent 1px 3px);
-  box-shadow:inset 0 0 200px rgba(0,0,0,.95);animation:flick 5s infinite}
-[data-style="phosphor"] .wrap{animation:crt .7s cubic-bezier(.2,.8,.2,1)}
-[data-style="phosphor"] .bar{background:#020a04;border-bottom:1px dashed var(--line)}
-[data-style="phosphor"] .brand::before{content:"root@codex:~$ "}
-[data-style="phosphor"] #stylebtn{border:1px solid var(--fg);border-radius:0;background:transparent;
-  color:var(--fg);text-transform:uppercase}
-[data-style="phosphor"] #stylebtn:hover{background:var(--fg);color:#020a04;text-shadow:none}
-[data-style="phosphor"] .kicker{color:var(--fg);text-transform:none;font-size:14px;letter-spacing:0}
-[data-style="phosphor"] .kicker::after{content:"\2588";animation:blink 1s steps(1) infinite;margin-left:4px}
-[data-style="phosphor"] .mast h1{font-size:clamp(26px,5vw,44px);text-transform:uppercase;letter-spacing:.24em;
-  margin:18px 0 4px}
-[data-style="phosphor"] .mast h1::before{content:"## "}
-[data-style="phosphor"] .dek::before{content:"// "}
-[data-style="phosphor"] .tile,[data-style="phosphor"] .panel{border:1px dashed var(--line);border-radius:0;background:var(--panel)}
-[data-style="phosphor"] .tile .k::before{content:"$ "}
-[data-style="phosphor"] .tile .v{font-weight:400;letter-spacing:.04em}
-[data-style="phosphor"] .tile .v::after{content:"_";animation:blink 1.2s steps(1) infinite}
-[data-style="phosphor"] svg{filter:drop-shadow(0 0 2px rgba(57,255,122,.55))}
-@keyframes flick{0%,100%{opacity:.92}47%{opacity:.86}48%{opacity:.97}50%{opacity:.8}53%{opacity:.94}}
-@keyframes blink{50%{opacity:0}}
-@keyframes crt{0%{transform:scaleY(.004);filter:brightness(6)}55%{transform:scaleY(1);filter:brightness(2)}100%{filter:none}}
-
-/* ---- 3. BROADSHEET: a newspaper of record -------------------------------------------- */
-:root[data-style="broadsheet"]{
-  --bg:#f1ead9;--panel:transparent;--line:#1b1b1b;--fg:#161411;--dim:#5a5247;
-  --cached:#a9a39a;--uncached:#161411;--out:#8b1e1e;--warn:#9e1b1b;--warn-bg:#e8dcc0;
-  --c0:#161411;--c1:#9e1b1b;--c2:#8a8170;--c3:#27466b;--c4:#b08d3c;--c5:#3f5b3a;--c6:#c2b8a3;
-  --c7:#5d2a42;--c8:#7c4a1e;--c9:#4a4a4a;--c10:#d8cbad;--c11:#44616f;--c12:#8a7a55;--c13:#9a948a;
-  --kicker:"Late City Edition \00B7  All the tokens fit to print"}
-[data-style="broadsheet"] body{font:16px/1.55 Georgia,"Times New Roman",serif;counter-reset:fig;
-  background-image:radial-gradient(rgba(60,40,10,.06) 1px,transparent 1.2px);background-size:4px 4px}
-[data-style="broadsheet"] .bar{border-bottom:3px double var(--line)}
-[data-style="broadsheet"] .brand{font-style:italic;font-weight:400}
-[data-style="broadsheet"] #stylebtn{border:1px solid var(--line);border-radius:0;background:none;
-  font-variant:small-caps;letter-spacing:.06em;font-size:14px}
-[data-style="broadsheet"] .mast{text-align:center;border-bottom:5px double var(--line);padding:22px 0 14px}
-[data-style="broadsheet"] .kicker{color:var(--fg);font:700 11px/1 Georgia,serif;letter-spacing:.3em;
-  border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:7px 0;display:block}
-[data-style="broadsheet"] .mast h1{font:400 clamp(42px,9vw,104px)/1.02 "Old English Text MT","UnifrakturMaguntia",
-  "Engravers Old English BT","Goudy Text MT",Georgia,serif;margin:16px 0 8px;letter-spacing:0}
-[data-style="broadsheet"] .dek{font-style:italic;color:var(--fg)}
-[data-style="broadsheet"] .tiles{gap:0;border-bottom:1px solid var(--line);margin-top:0}
-[data-style="broadsheet"] .tile{background:none;border:0;border-right:1px solid var(--line);border-radius:0;padding:16px 18px}
-[data-style="broadsheet"] .tile:last-child{border-right:0}
-[data-style="broadsheet"] .tile .k{font-variant:small-caps;text-transform:none;letter-spacing:.1em;
-  color:var(--fg);font-weight:700;font-size:14px}
-[data-style="broadsheet"] .tile .v{font:700 36px/1.1 Georgia,serif}
-[data-style="broadsheet"] .tile .n{font-style:italic}
-[data-style="broadsheet"] .panel{background:none;border:0;border-top:3px solid var(--line);border-radius:0;
-  padding:12px 0 18px;margin-top:22px;counter-increment:fig}
-[data-style="broadsheet"] .panel::before{content:"Fig. " counter(fig) ".";display:block;font-style:italic;
-  font-weight:700;margin-bottom:6px}
-[data-style="broadsheet"] .pies>div{border-left:1px solid var(--line);padding-left:18px}
-
-/* ---- 4. SWISS: grid, red, and very large numbers ------------------------------------- */
-:root[data-style="swiss"]{
-  --bg:#ffffff;--panel:#ffffff;--line:#111111;--fg:#111111;--dim:#6b6b6b;
-  --cached:#cfcfcf;--uncached:#e3000f;--out:#111111;--warn:#e3000f;--warn-bg:#ffe3e3;
-  --c0:#e3000f;--c1:#111111;--c2:#8a8a8a;--c3:#ff7a00;--c4:#0050a0;--c5:#c9c9c9;--c6:#7a0008;
-  --c7:#4d4d4d;--c8:#ff9aa0;--c9:#0a8f5a;--c10:#ffcc00;--c11:#003366;--c12:#a0a0a0;--c13:#d8d8d8;
-  --kicker:"Bericht \2014  Report \2014  Rapport \2014  Nr. 01"}
-[data-style="swiss"] body{font:15px/1.4 "Helvetica Neue",Helvetica,Arial,sans-serif}
-[data-style="swiss"] .bar{border-bottom:2px solid #111}
-[data-style="swiss"] .brand{text-transform:lowercase;letter-spacing:-.02em;font-size:17px}
-[data-style="swiss"] #stylebtn{border-radius:0;background:#e3000f;color:#fff;border:0;font-weight:700;padding:9px 16px}
-[data-style="swiss"] .mast{border-top:14px solid #e3000f;margin-top:18px;padding-top:18px;overflow:hidden}
-[data-style="swiss"] .mast::after{content:"";position:absolute;right:-60px;top:24px;width:260px;height:260px;
-  border-radius:50%;background:#e3000f;z-index:-1}
-[data-style="swiss"] .kicker{color:#111;font-weight:700;letter-spacing:0;text-transform:none}
-[data-style="swiss"] .mast h1{font:700 clamp(52px,11vw,150px)/.86 "Helvetica Neue",Helvetica,Arial,sans-serif;
-  letter-spacing:-.06em;text-transform:lowercase;margin:22px 0 18px;max-width:9ch;animation:slide .6s both cubic-bezier(.2,.8,.2,1)}
-[data-style="swiss"] .mast h1::after{content:".";color:#e3000f}
-[data-style="swiss"] .dek{color:#111;font-weight:700}
-[data-style="swiss"] .tiles{gap:0 24px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:36px}
-[data-style="swiss"] .tile{border:0;border-top:2px solid #111;border-radius:0;background:none;padding:10px 0 20px}
-[data-style="swiss"] .tile .v{font-size:clamp(32px,3.6vw,46px);font-weight:700;letter-spacing:-.05em;line-height:1.05}
-[data-style="swiss"] .tile:first-child .v{color:#e3000f}
-[data-style="swiss"] .tile .k{text-transform:lowercase;letter-spacing:0;font-size:13px;color:#111;font-weight:700}
-[data-style="swiss"] .panel{border:0;border-top:2px solid #111;border-radius:0;background:none;padding:14px 0;margin-top:26px}
-@keyframes slide{0%{transform:translateX(-30px);opacity:0}100%{transform:none;opacity:1}}
-
-/* ---- 5. BLUEPRINT: drafted, dimensioned, title-blocked ------------------------------- */
-:root[data-style="blueprint"]{
-  --bg:#0f3d7a;--panel:rgba(15,61,122,.72);--line:rgba(220,235,255,.55);--fg:#eaf3ff;--dim:#a9c6ee;
-  --cached:#6fa3e6;--uncached:#ffffff;--out:#ffe45c;--warn:#ffe45c;--warn-bg:rgba(255,228,92,.12);
-  --c0:#ffffff;--c1:#ffe45c;--c2:#7fd7ff;--c3:#ff9e7a;--c4:#b3ffcf;--c5:#c9b3ff;--c6:#9fb8d9;
-  --c7:#ffc2e0;--c8:#5ab0ff;--c9:#e0ff7a;--c10:#ffd9a0;--c11:#7affea;--c12:#d0d0d0;--c13:#7a93b8;
-  --kicker:"DWG. NO. TC-001 \00B7  REV. A \00B7  DO NOT SCALE"}
-[data-style="blueprint"] body{font:14px/1.5 "Courier New",Consolas,monospace;background-color:#0f3d7a;
-  background-image:linear-gradient(rgba(255,255,255,.13) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(255,255,255,.13) 1px,transparent 1px),
-    linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px);
-  background-size:100px 100px,100px 100px,20px 20px,20px 20px;background-attachment:fixed}
-[data-style="blueprint"] .bar{background:rgba(15,61,122,.92);border-bottom:2px solid var(--fg)}
-[data-style="blueprint"] .brand{text-transform:uppercase;letter-spacing:.2em}
-[data-style="blueprint"] #stylebtn{border:1px dashed var(--fg);border-radius:0;background:none;
-  text-transform:uppercase;letter-spacing:.14em}
-[data-style="blueprint"] .mast{padding:30px 0 14px;min-height:170px}
-[data-style="blueprint"] .kicker{color:var(--fg);letter-spacing:.2em}
-[data-style="blueprint"] .mast h1{font:700 clamp(24px,4.4vw,40px)/1.15 "Courier New",monospace;
-  letter-spacing:.28em;text-transform:uppercase;max-width:62%}
-[data-style="blueprint"] .tblock{display:grid;grid-template-columns:auto auto;position:absolute;right:0;top:26px;
-  border:2px solid var(--fg);margin:0;font-size:11px;text-transform:uppercase;background:var(--bg)}
-[data-style="blueprint"] .tblock>div{display:contents}
-[data-style="blueprint"] .tblock dt,[data-style="blueprint"] .tblock dd{margin:0;padding:3px 10px;border:1px solid var(--line)}
-[data-style="blueprint"] .tblock dt{color:var(--dim)}
-[data-style="blueprint"] .tile,[data-style="blueprint"] .panel{border:1px solid var(--line);border-radius:0;
-  position:relative;background:var(--panel)}
-[data-style="blueprint"] .tile::before,[data-style="blueprint"] .panel::before,
-[data-style="blueprint"] .tile::after,[data-style="blueprint"] .panel::after{content:"";position:absolute;
-  width:14px;height:14px;border:0 solid var(--fg)}
-[data-style="blueprint"] .tile::before,[data-style="blueprint"] .panel::before{left:-6px;top:-6px;border-width:2px 0 0 2px}
-[data-style="blueprint"] .tile::after,[data-style="blueprint"] .panel::after{right:-6px;bottom:-6px;border-width:0 2px 2px 0}
-[data-style="blueprint"] .tile .k{display:flex;align-items:center;gap:6px;color:var(--fg)}
-[data-style="blueprint"] .tile .k::before{content:"\25C2";color:var(--dim)}
-[data-style="blueprint"] .tile .k::after{content:"";flex:1;height:1px;background:var(--dim);margin-right:-2px}
-[data-style="blueprint"] .tile .v{font-weight:400;letter-spacing:.06em}
-@media(max-width:760px){[data-style="blueprint"] .tblock{position:static;margin-top:14px;display:inline-grid}
-  [data-style="blueprint"] .mast h1{max-width:none}}
-
-/* ---- 6. OUTRUN: sunset, chrome, and a grid that never ends --------------------------- */
-:root[data-style="outrun"]{
-  --bg:#12002b;--panel:rgba(22,0,48,.74);--line:rgba(255,64,200,.45);--fg:#fff1ff;--dim:#caa2ea;
-  --cached:#6b2fa8;--uncached:#ff2fd0;--out:#27f3ff;--warn:#ffd23f;--warn-bg:rgba(255,210,63,.12);
-  --c0:#ff2fd0;--c1:#27f3ff;--c2:#ffd23f;--c3:#ff6b3d;--c4:#9d5cff;--c5:#3dff9e;--c6:#ff8fe8;
-  --c7:#4d7cff;--c8:#ffb86b;--c9:#b3fffb;--c10:#ff4d6d;--c11:#c6ff3d;--c12:#e0b3ff;--c13:#8d7bb0;
-  --kicker:"Token Drive '86"}
-[data-style="outrun"] body{font:15px/1.5 "Trebuchet MS","Segoe UI",sans-serif;
-  background:linear-gradient(#07001a 0%,#24004a 34%,#7a1680 56%,#ff5e62 66%,#12002b 66.1%) fixed}
-[data-style="outrun"] .sun{display:block;position:fixed;left:50%;bottom:30vh;width:min(62vw,540px);aspect-ratio:1;
-  transform:translateX(-50%);border-radius:50%;z-index:0;
-  background:linear-gradient(#fff36b 8%,#ff9d3d 45%,#ff2fd0 88%);
-  -webkit-mask-image:linear-gradient(#000 52%,transparent 52% 55%,#000 55% 63%,transparent 63% 67%,#000 67% 74%,
-    transparent 74% 80%,#000 80% 86%,transparent 86% 94%,#000 94%);
-  mask-image:linear-gradient(#000 52%,transparent 52% 55%,#000 55% 63%,transparent 63% 67%,#000 67% 74%,
-    transparent 74% 80%,#000 80% 86%,transparent 86% 94%,#000 94%);
-  filter:drop-shadow(0 0 60px rgba(255,60,190,.8))}
-[data-style="outrun"] .floor{display:block;position:fixed;left:0;right:0;bottom:0;height:34vh;perspective:240px;
-  overflow:hidden;z-index:0;background:linear-gradient(#1b0036,#05000f);
-  box-shadow:0 -2px 30px 4px rgba(255,47,208,.75)}
-[data-style="outrun"] .plane{position:absolute;left:-60%;right:-60%;top:0;height:260%;transform-origin:50% 0;
-  transform:rotateX(76deg);
-  background-image:linear-gradient(rgba(255,47,208,.95) 2px,transparent 2px),
-    linear-gradient(90deg,rgba(255,47,208,.95) 2px,transparent 2px);
-  background-size:64px 64px;animation:drive .9s linear infinite}
-[data-style="outrun"] .bar{background:rgba(11,0,32,.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--line)}
-[data-style="outrun"] .brand{font-style:italic;color:#27f3ff;text-shadow:0 0 10px #27f3ff}
-[data-style="outrun"] #stylebtn{background:linear-gradient(90deg,#ff2fd0,#27f3ff);color:#12002b;border:0;
-  font-weight:800;box-shadow:0 0 18px rgba(255,47,208,.75)}
-[data-style="outrun"] #stylebtn .sw-l,[data-style="outrun"] #stylebtn #styleidx{opacity:.8}
-[data-style="outrun"] .mast{text-align:center;padding:9vh 0 20vh}
-[data-style="outrun"] .kicker{font:italic 400 clamp(28px,5vw,46px)/1 "Brush Script MT","Segoe Script",cursive;
-  color:#ff2fd0;text-transform:none;letter-spacing:0;text-shadow:0 0 14px #ff2fd0,0 0 2px #fff;
-  display:inline-block;transform:rotate(-7deg) translateY(18px);position:relative;z-index:2}
-[data-style="outrun"] .mast h1{font:900 italic clamp(44px,10vw,124px)/.92 "Arial Black",Impact,sans-serif;
-  text-transform:uppercase;letter-spacing:-.02em;transform:skewX(-9deg);
-  background:linear-gradient(#f4fbff 0%,#9adcff 44%,#20124d 50%,#ff9ae6 53%,#ffffff 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-stroke:1px rgba(255,255,255,.55);
-  filter:drop-shadow(0 0 22px rgba(255,47,208,.65))}
-[data-style="outrun"] .dek{color:#27f3ff;letter-spacing:.2em;text-transform:uppercase;font-size:12px;
-  text-shadow:0 0 8px #27f3ff}
-[data-style="outrun"] .tile,[data-style="outrun"] .panel{background:var(--panel);border:1px solid var(--line);
-  border-radius:4px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  box-shadow:0 0 22px rgba(255,47,208,.3),inset 0 0 22px rgba(39,243,255,.07)}
-[data-style="outrun"] .tile .v{color:#27f3ff;text-shadow:0 0 12px rgba(39,243,255,.85);font-style:italic}
-@keyframes drive{to{background-position:0 64px}}
-
-/* ---- 7/8. TOKENOPOLIS and NEBULA: glass over a live WebGL scene ---------------------- */
-:root[data-style="city"]{
-  --bg:#05060d;--panel:rgba(12,14,32,.56);--line:rgba(140,170,255,.2);--fg:#eef2ff;--dim:#9aa6d4;
-  --cached:#2d3f8a;--uncached:#5ee1ff;--out:#ff4fd8;--warn:#ffc857;--warn-bg:rgba(255,200,87,.12);
-  --c0:#5ee1ff;--c1:#ff4fd8;--c2:#ffc857;--c3:#7c5cff;--c4:#43ff9e;--c5:#ff7a45;--c6:#4f8bff;
-  --c7:#f4ff5e;--c8:#ff8fb3;--c9:#3dd6c6;--c10:#c38bff;--c11:#9dff4f;--c12:#ffa6f0;--c13:#8a93b8;
-  --sky:#060817;--grid:#3b6cff;--kicker:"Tokenopolis"}
-:root[data-style="galaxy"]{
-  --bg:#02010a;--panel:rgba(14,8,34,.5);--line:rgba(190,160,255,.2);--fg:#f3eeff;--dim:#a99cc9;
-  --cached:#3a2a7a;--uncached:#b18cff;--out:#ffb86b;--warn:#ffd37a;--warn-bg:rgba(255,211,122,.12);
-  --c0:#7fb2ff;--c1:#ff7ac6;--c2:#ffd37a;--c3:#8affd1;--c4:#c29bff;--c5:#ff9466;--c6:#66e0ff;
-  --c7:#f7ff8a;--c8:#ff6f91;--c9:#9dffa0;--c10:#d6b3ff;--c11:#ffb3e6;--c12:#9ab8ff;--c13:#8c86a8;
-  --sky:#02010a;--grid:#ffe3b0;--kicker:"Nebula"}
-[data-style="city"] body,[data-style="galaxy"] body{font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif}
-[data-style="city"] #stage,[data-style="galaxy"] #stage{display:block}
-[data-style="city"] body{background:radial-gradient(ellipse at 50% 90%,#16204d,#05060d 70%) fixed}
-[data-style="galaxy"] body{background:radial-gradient(ellipse at 50% 50%,#1d0f3d,#02010a 70%) fixed}
-[data-style="city"] .mast,[data-style="galaxy"] .mast{min-height:64vh;display:flex;flex-direction:column;
-  justify-content:flex-end;padding-bottom:22px;text-shadow:0 2px 24px rgba(0,0,0,.9);pointer-events:none}
-[data-style="galaxy"] .mast{align-items:center;text-align:center;justify-content:center;min-height:78vh}
-[data-style="galaxy"] .mast::before{content:"";position:absolute;left:50%;top:50%;width:min(900px,100%);height:340px;
-  transform:translate(-50%,-50%);background:radial-gradient(closest-side,rgba(2,1,10,.72),transparent);z-index:-1}
-[data-style="city"] .kicker,[data-style="galaxy"] .kicker{letter-spacing:.7em;color:var(--c0);font-weight:700;font-size:13px}
-[data-style="galaxy"] .kicker{color:var(--c1)}
-[data-style="city"] .mast h1,[data-style="galaxy"] .mast h1{font:200 clamp(40px,7.5vw,92px)/1 "Segoe UI Light",
-  "Helvetica Neue",system-ui,sans-serif;letter-spacing:.01em;margin:10px 0}
-[data-style="city"] .cap-city,[data-style="galaxy"] .cap-galaxy{display:block;color:var(--dim);font-size:12px;
-  margin:10px 0 0;max-width:560px}
-.nogl .cap-city::after,.nogl .cap-galaxy::after{content:" (WebGL is unavailable here, so the scene is off.)"}
-[data-style="city"] .bar,[data-style="galaxy"] .bar{background:rgba(5,6,13,.35);border-bottom:1px solid var(--line);
-  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-[data-style="city"] #stylebtn,[data-style="galaxy"] #stylebtn{background:rgba(255,255,255,.06);
-  border:1px solid color-mix(in srgb,var(--c0) 60%,transparent);box-shadow:0 0 22px color-mix(in srgb,var(--c0) 35%,transparent)}
-[data-style="city"] .tile,[data-style="city"] .panel,
-[data-style="galaxy"] .tile,[data-style="galaxy"] .panel{background:var(--panel);border:1px solid var(--line);
-  border-radius:16px;backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%)}
-[data-style="city"] .tile .v,[data-style="galaxy"] .tile .v{font-weight:300;font-size:28px}
+/* ---- 2. MATISSE: papiers découpés -- gouache paper, cut with scissors, pinned up ------ */
+/* Cream paper, a sage and a dusty-rose sheet torn behind the page, white brush dashes and an
+   ink flower cut in one piece.  Gouache is matte, so nothing here is glossy: fills are flat,
+   and the only depth is a second coloured sheet showing under the edge of a panel. */
+:root[data-style="matisse"]{color-scheme:light;
+  --bg:#f3efe6;--panel:#faf7f0;--line:#e0d8c8;--fg:#23252f;--dim:#6a655d;
+  --cached:#c9d4d2;--uncached:#2f3a63;--out:#139688;--warn:#b4533e;--warn-bg:#f1dcd4;
+  --c0:#394ca3;--c1:#bb5135;--c2:#139688;--c3:#a29015;--c4:#a82653;--c5:#1099bf;--c6:#732e7b;
+  --c7:#66640c;--c8:#5571d8;--c9:#cb749e;--c10:#00673f;--c11:#c6784a;--c12:#87579d;--c13:#8f887c;
+  --sage:#c9d4d2;--rose:#a8807b;--blush:#dcc0ba;--straw:#e9dfc8;--ink:#23252f;
+  --serif:"Didot","Bodoni 72","Bodoni MT","Playfair Display","Libre Bodoni",Georgia,"Times New Roman",serif;
+  --kicker:"Papiers d\00E9 coup\00E9 s \00B7  Codex usage, cut from local records"}
+[data-style="matisse"] body{font:15px/1.55 "Avenir Next",Avenir,Futura,"Century Gothic","Gill Sans",
+  "Trebuchet MS",system-ui,sans-serif}
+[data-style="matisse"] .wrap{position:relative;z-index:1}
+[data-style="matisse"] nav.bar{background:rgba(243,239,230,.86);border-bottom:2px solid var(--ink);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+[data-style="matisse"] .brand{font:italic 400 21px/1 var(--serif);letter-spacing:0}
+[data-style="matisse"] #stylebtn{background:var(--ink);color:var(--bg);border:0;
+  border-radius:22px 9px 18px 12px/12px 18px 9px 22px}
+[data-style="matisse"] #stylebtn:hover{transform:rotate(-2deg)}
+[data-style="matisse"] .keys{color:var(--fg)}
+[data-style="matisse"] .mast{padding:64px 0 40px;min-height:42vh}
+[data-style="matisse"] .kicker{font:italic 400 17px/1.3 var(--serif);text-transform:none;letter-spacing:.01em;
+  color:var(--fg)}
+[data-style="matisse"] .mast h1{font:400 clamp(46px,8.4vw,104px)/.94 var(--serif);letter-spacing:-.02em;
+  margin:12px 0 20px;max-width:8.5ch}
+[data-style="matisse"] .dek{display:inline-block;background:var(--ink);color:var(--bg);padding:6px 14px 7px;
+  font-size:13px;letter-spacing:.03em;transform:rotate(-1deg);
+  border-radius:3px 14px 4px 12px/12px 4px 14px 3px}
+/* The tiles are the cut-outs: one sheet of gouache each, trimmed by hand and pinned. */
+[data-style="matisse"] .tiles{gap:18px;margin-top:8px}
+[data-style="matisse"] .tile{position:relative;border:0;padding:18px 18px 18px 20px;background:var(--sage);
+  border-radius:28px 12px 34px 16px/18px 30px 14px 26px;transform:rotate(-.7deg);
+  transition:transform .25s cubic-bezier(.3,1.4,.5,1)}
+[data-style="matisse"] .tile:nth-child(3n+2){background:var(--blush);transform:rotate(.6deg);
+  border-radius:14px 32px 18px 28px/26px 12px 30px 16px}
+[data-style="matisse"] .tile:nth-child(3n+3){background:var(--straw);transform:rotate(-.3deg);
+  border-radius:34px 18px 26px 12px/14px 26px 18px 30px}
+[data-style="matisse"] .tile:hover{transform:rotate(0) translateY(-3px)}
+[data-style="matisse"] .tile::before{content:"";position:absolute;top:9px;right:13px;width:7px;height:7px;
+  border-radius:50%;background:var(--ink)}
+[data-style="matisse"] .tile .k{color:var(--fg);font-weight:600;font-size:10.5px;letter-spacing:.16em}
+[data-style="matisse"] .tile .v{font:400 42px/1.05 var(--serif);letter-spacing:-.01em;margin-top:6px}
+[data-style="matisse"] .tile .n{color:rgba(35,37,47,.78)}
+/* Each panel is a paper sheet laid over a coloured one, a few millimetres out of register. */
+[data-style="matisse"] .panel{border:0;padding:18px 20px;margin-top:26px;
+  border-radius:6px 22px 8px 18px/18px 8px 22px 6px;box-shadow:-10px 10px 0 -2px var(--sage)}
+[data-style="matisse"] .panel:nth-child(even){box-shadow:10px 10px 0 -2px var(--blush)}
+[data-style="matisse"] .panel.pies{box-shadow:-10px 10px 0 -2px var(--straw)}
+[data-style="matisse"] .legend{color:var(--dim)}
+[data-style="matisse"] .legend i{width:12px;height:12px;border-radius:60% 40% 55% 45%/55% 60% 40% 45%}
+[data-style="matisse"] .pie path{stroke-width:3;stroke-linejoin:round}
+/* The area under the cumulative curve is a flat sage sheet, cut along the ink line. */
+[data-style="matisse"] #rlchart path[fill-opacity]{fill:var(--sage);fill-opacity:1}
+[data-style="matisse"] .deco .mz{display:block}
+.mz{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.mz svg{position:absolute;display:block;height:auto;overflow:visible}
+.mz .sage{fill:var(--sage)} .mz .rose{fill:var(--rose)} .mz .ink{fill:var(--ink)}
+.mz .stem{fill:none;stroke:var(--ink);stroke-width:7;stroke-linecap:round}
+.mz .dash{stroke:#fff;stroke-width:11;stroke-linecap:round}
+.mz-sage{left:-10vw;top:3vh;width:min(66vw,720px)}
+.mz-rose{right:-9vw;bottom:-10vh;width:min(50vw,560px)}
+.mz-dash1{right:8vw;top:10vh;width:min(36vw,360px)}
+.mz-dash2{left:1vw;bottom:5vh;width:min(24vw,250px)}
+.mz-flower{right:max(1vw,calc(50vw - 640px));top:8vh;width:auto!important;height:min(86vh,760px)!important;
+  transform-origin:62% 100%;animation:sway 11s ease-in-out infinite alternate}
+@keyframes sway{from{transform:rotate(-1.8deg)}to{transform:rotate(1.4deg)}}
+@media(prefers-reduced-motion:reduce){.mz-flower{animation:none}}
+@media(max-width:640px){
+  .mz-flower{right:-24vw;top:12vh;height:48vh!important}
+  .mz-sage{left:-30vw;width:96vw} .mz-rose{right:-30vw;width:84vw}
+  .mz-dash1{width:44vw;right:-6vw;top:44vh}
+  [data-style="matisse"] .mast{padding-top:40px;min-height:0}
+  [data-style="matisse"] .kicker{max-width:64%}
+  [data-style="matisse"] .tile .v{font-size:32px}}
 """
 
 JS = """
@@ -409,9 +228,10 @@ const HOUR = 3600, DAY = 86400;
 const G = D.geo || {};
 const DOM = D.domain;
 let VIEW = DOM ? [DOM[0], DOM[1]] : null;
-// Deepest zoom: a thousandth of the corpus, floored at ten minutes.  It bounds how far
-// off-screen a path coordinate can land as much as it bounds the zoom.
-const MIN_SPAN = DOM ? Math.max(600, (DOM[1]-DOM[0])/1000) : 600;
+// Deepest zoom: one day.  Content is placed at the hour its file opened, so below a day the
+// composition pie stops resolving and mostly shows the gaps between sessions; a day is also
+// the unit the daily chart is drawn in.  (A corpus shorter than a day is shown whole.)
+const MIN_SPAN = 86400;
 
 let W = G.w||980, L = G.l||62, RM = G.r||48, PLOT = W-L-RM;
 
@@ -606,14 +426,15 @@ function drawPie(){
     // the range on screen -- and a reader cannot tell them apart from an empty panel.
     const msg = series.length ? 'No tokenized content in the visible range.'
                               : (CATS.note || 'No content in range.');
-    host.innerHTML = `<p class="sub">${esc(msg)}</p>`;
+    host.innerHTML = emptyPie(msg);
+    host.__shown = null;
     return;
   }
   // Colour is the category's place in the corpus-wide order, so a slice keeps its colour as
   // the viewport moves and one pie can be read against the last.
   const order = CATS.order || Object.keys(tot);
-  const rows = order.map((k,i)=>({k:k, v:tot[k]||0, fill:`var(--c${i%14})`})).filter(r=>r.v>0);
-  host.innerHTML = pie(rows, sum, 'tokens in view', 'content composition by category');
+  const rows = order.map((k,i)=>({k:k, v:tot[k]||0, fill:`var(--c${i%14})`}));
+  pieTo(host, rows, sum, 'tokens in view', 'content composition by category');
 }
 
 // ---- chart 3b: which models took the input --------------------------------------------
@@ -635,21 +456,78 @@ function drawModelPie(){
       tot[k] = (tot[k]||0) + c[m]; sum += c[m];
     }
   }
-  if(!sum){ host.innerHTML = '<p class="sub">No recorded input in the visible range.</p>'; return; }
+  if(!sum){
+    host.innerHTML = emptyPie('No recorded input in the visible range.');
+    host.__shown = null;
+    return;
+  }
   const rows = keys.concat(['other']).map(k=>({k:k, v:tot[k]||0,
-    fill: k in rank ? `var(--c${rank[k]%14})` : 'var(--dim)'})).filter(r=>r.v>0);
-  host.innerHTML = pie(rows, sum, 'recorded input in view', 'recorded input by model');
+    fill: k in rank ? `var(--c${rank[k]%14})` : 'var(--dim)'}));
+  pieTo(host, rows, sum, 'recorded input in view', 'recorded input by model');
 }
 
-/** A pie and its legend.  `rows` are {k, v, fill} in draw order; an entry that would read
- *  0.0% keeps its slice but not its legend line. */
-function pie(rows, sum, what, label){
+// ---- the pies follow the viewport, a beat behind ---------------------------------------
+// A drag or a zoom redraws the time charts on every frame; recomposing the pies at that rate
+// reads as flicker.  They wait until the viewport has been still for PIE_WAIT ms, then turn
+// from the slices they show to the new ones.  A pie's rows are the same keys in the same
+// order on every draw -- the corpus-wide order, zero-valued entries included -- so a slice
+// can grow from nothing or shrink away rather than jump.
+const REDUCE = (()=>{ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }
+                      catch(_){ return false; } })();
+const PIE_WAIT = 180, PIE_MS = 520;
+let pieTimer = 0, pieDrawn = false;
+
+function schedulePies(){
+  if(!pieDrawn){ pieDrawn = true; drawPie(); drawModelPie(); return; }   // first paint: now
+  clearTimeout(pieTimer);
+  pieTimer = setTimeout(()=>{ pieTimer = 0; drawPie(); drawModelPie(); }, PIE_WAIT);
+}
+
+/** Draw `rows` into `host`, turning from whatever fractions it shows now.  A newer call
+ *  cancels an older tween mid-flight and starts from where that one had got to.  A frame
+ *  without a timestamp (a stub DOM) lands on the end state at once. */
+function pieTo(host, rows, sum, what, label){
+  const to = rows.map(r=>r.v/sum);
+  const from = host.__shown && host.__shown.length === to.length ? host.__shown : null;
+  const tok = host.__tok = (host.__tok||0) + 1;
+  if(!from || REDUCE){
+    host.__shown = to;
+    host.innerHTML = pie(rows, sum, what, label, to);
+    return;
+  }
+  let t0 = null;
+  const step = ts=>{
+    if(host.__tok !== tok) return;                  // superseded by a newer range
+    const k = typeof ts === 'number' ? Math.min(1, (ts - (t0 === null ? (t0 = ts) : t0))/PIE_MS) : 1;
+    const e = 1 - Math.pow(1-k, 3);                 // ease out: fast start, soft landing
+    host.__shown = from.map((f,i)=>f + (to[i]-f)*e);
+    host.innerHTML = pie(rows, sum, what, label, host.__shown);
+    if(k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/** An empty range keeps the pie's place -- a hollow ring and the reason -- so the panel does
+ *  not collapse under the reader and spring back on the next range. */
+function emptyPie(msg){
+  const size = 240, r = size/2-4, c0 = size/2;
+  return `<div class="row" style="gap:24px"><div class="pie"><svg viewBox="0 0 ${size} ${size}" `+
+    `role="img" aria-label="${esc(msg)}"><circle cx="${c0}" cy="${c0}" r="${r-1}" fill="none" `+
+    `stroke="var(--line)" stroke-width="2" stroke-dasharray="6 6"/></svg></div>`+
+    `<p class="sub" style="max-width:220px">${esc(msg)}</p></div>`;
+}
+
+/** A pie and its legend.  `rows` are {k, v, fill} in draw order and `fr` the fraction of the
+ *  circle each one takes -- its share, or a moment of a tween toward it.  The legend always
+ *  reads the share; an entry that would read 0.0% keeps its slice but not its legend line. */
+function pie(rows, sum, what, label, fr){
   const size = 240, r = size/2-4, c0 = size/2;
   let s = `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="${esc(label)}">`;
   let a = -Math.PI/2;                        // first slice starts at twelve o'clock
-  for(const row of rows){
-    const frac = row.v/sum;
-    const tip = `${row.k}: ${row.v.toLocaleString()} tokens (${(100*frac).toFixed(1)}%)`;
+  for(let i=0; i<rows.length; i++){
+    const row = rows[i], frac = fr ? fr[i] : row.v/sum;
+    if(!(frac > 1e-6)) continue;
+    const tip = `${row.k}: ${row.v.toLocaleString()} tokens (${(100*row.v/sum).toFixed(1)}%)`;
     if(frac >= 1-1e-12){
       // One entry holding everything: an arc whose ends coincide draws nothing.
       s += `<circle cx="${c0}" cy="${c0}" r="${r}" fill="${row.fill}"><title>${esc(tip)}</title></circle>`;
@@ -680,8 +558,7 @@ function redraw(){
   const tk = VIEW ? ticks() : [];
   drawRL(tk);
   drawDaily(tk);
-  drawPie();
-  drawModelPie();
+  schedulePies();
 }
 
 /** Put `tAnchor` under `vxAnchor` at the given span, clamped to the domain. */
@@ -791,379 +668,14 @@ function init(){
 init();
 """
 
-# The style switcher and the two WebGL scenes.  Kept apart from JS so the charts' script
-# reads as it did; it runs after init(), touches the charts only through measure() and
-# redraw(), and does nothing at all where there is no real DOM (scripts/test_page.js).
+# The style switcher.  Kept apart from JS so the charts' script reads as it did; it runs after
+# init(), touches the charts only through measure() and redraw(), and does nothing at all
+# where there is no real DOM (scripts/test_page.js).
 STYLE_JS = r"""
-// ---- styles: one page, nine opinions --------------------------------------------------
+// ---- styles: one page, several readings -----------------------------------------------
 const STYLES = D.styles || [['clinical','Clinical']];
 const ROOT = document.documentElement;
-const REDUCE = (()=>{ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }
-                      catch(_){ return false; } })();
 
-function hexRGB(s){
-  s = String(s||'').trim();
-  if(s[0]!=='#' || s.length<7) return [0.6, 0.6, 0.7];
-  return [1,3,5].map(i => parseInt(s.slice(i,i+2), 16)/255);
-}
-function cssVar(n){ try{ return getComputedStyle(ROOT).getPropertyValue(n); }catch(_){ return ''; } }
-function palette(){ const p = []; for(let i=0;i<14;i++) p.push(hexRGB(cssVar('--c'+i))); return p; }
-
-// A deterministic generator, so a scene is the same scene every time the page opens.
-function prng(seed){
-  return ()=>{ seed |= 0; seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0)/4294967296; };
-}
-
-// ---- the stage: tiny WebGL, no library ------------------------------------------------
-// The scenes are drawn from the same payload as the charts and read the same VIEW: whatever
-// the time charts have in range is lit, and everything else dims.
-const Stage = (()=>{
-  const cv = byId('stage');
-  if(!cv || !cv.getContext) return null;
-  let gl = null, ok = null, kind = null, raf = 0, born = 0, scene = null;
-  let mx = 0, my = 0, tmx = 0, tmy = 0, sc = 0;
-  const FOV = 50*Math.PI/180;
-  const rel = t => (t - (DOM ? DOM[0] : 0))/HOUR;
-
-  function context(){
-    if(ok !== null) return ok;
-    try{ gl = cv.getContext('webgl', {antialias:true, alpha:false})
-              || cv.getContext('experimental-webgl'); }catch(_){ gl = null; }
-    ok = !!gl;
-    if(!ok) ROOT.classList.add('nogl');
-    return ok;
-  }
-  function program(vs, fs){
-    const mk = (type, src)=>{
-      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-      if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
-      return s;
-    };
-    const p = gl.createProgram();
-    gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
-    gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
-    gl.linkProgram(p);
-    if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
-    const u = {};
-    p.u = n => (n in u) ? u[n] : (u[n] = gl.getUniformLocation(p, n));
-    return p;
-  }
-  function upload(p, data, spec){
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    const stride = spec.reduce((s, a)=>s+a[1], 0);
-    return {buf, n: data.length/stride, bind(){
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      for(let i=0;i<8;i++) gl.disableVertexAttribArray(i);
-      let off = 0;
-      for(const [name, k] of spec){
-        const l = gl.getAttribLocation(p, name);
-        if(l >= 0){ gl.enableVertexAttribArray(l);
-                    gl.vertexAttribPointer(l, k, gl.FLOAT, false, stride*4, off*4); }
-        off += k;
-      }
-    }};
-  }
-
-  // column-major 4x4
-  const mul = (a, b)=>{ const o = new Float32Array(16);
-    for(let i=0;i<4;i++) for(let j=0;j<4;j++){ let s = 0;
-      for(let k=0;k<4;k++) s += a[k*4+j]*b[i*4+k]; o[i*4+j] = s; } return o; };
-  const persp = (f, asp, n, fr)=>{ const t = 1/Math.tan(f/2), nf = 1/(n-fr);
-    return new Float32Array([t/asp,0,0,0, 0,t,0,0, 0,0,(fr+n)*nf,-1, 0,0,2*fr*n*nf,0]); };
-  const sub = (a, b)=>[a[0]-b[0], a[1]-b[1], a[2]-b[2]];
-  const cross = (a, b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const norm = a=>{ const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0]/l, a[1]/l, a[2]/l]; };
-  const dot = (a, b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-  function look(e, c){
-    const z = norm(sub(e, c)), x = norm(cross([0,1,0], z)), y = cross(z, x);
-    return new Float32Array([x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
-                             -dot(x,e), -dot(y,e), -dot(z,e), 1]);
-  }
-
-  // ---- Tokenopolis: one tower per day, one row per week, stacked by model -----------
-  const CITY_VS = `
-attribute vec3 aP; attribute vec3 aN; attribute vec3 aC; attribute vec4 aX; attribute vec2 aU;
-uniform mat4 uM; uniform vec2 uV; uniform float uG;
-varying vec3 vN; varying vec3 vC; varying vec3 vW; varying vec2 vU; varying float vOn; varying float vK;
-void main(){
-  float g = clamp(uG*1.7 - aX.w*0.7, 0.0, 1.0);
-  g = g*g*(3.0 - 2.0*g);
-  vec3 p = vec3(aP.x, aP.y*g, aP.z);
-  vOn = (aX.y > uV.x && aX.x < uV.y) ? 1.0 : 0.0;
-  vN = aN; vC = aC; vW = p; vU = aU; vK = aX.z;
-  gl_Position = uM*vec4(p, 1.0);
-}`;
-  const CITY_FS = `
-precision mediump float;
-varying vec3 vN; varying vec3 vC; varying vec3 vW; varying vec2 vU; varying float vOn; varying float vK;
-uniform vec3 uSky; uniform vec3 uGrid; uniform vec3 uEye; uniform float uFog; uniform float uT; uniform float uCell;
-float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); }
-void main(){
-  vec3 col;
-  if(vK > 0.5 && vK < 1.5){
-    vec2 q = abs(fract(vW.xz/uCell) - 0.5);
-    float line = 1.0 - smoothstep(0.0, 0.03, min(q.x, q.y));
-    float pulse = 0.5 + 0.5*sin(uT*1.4 - length(vW.xz)*0.45);
-    col = uSky*1.3 + uGrid*line*(0.25 + 0.55*pulse);
-  } else {
-    vec3 n = normalize(vN);
-    float dif = max(dot(n, normalize(vec3(0.35, 0.9, 0.25))), 0.0);
-    float rim = pow(1.0 - abs(dot(n, normalize(uEye - vW))), 3.0);
-    vec3 base = vC*(0.2 + 0.5*dif) + vC*rim*0.6;
-    if(vK > 1.5){
-      vec2 e = abs(vU - 0.5);
-      base = vC*0.5 + vC*smoothstep(0.4, 0.5, max(e.x, e.y))*1.4;
-    } else {
-      vec2 c = vec2(vU.x*4.0, vU.y*5.0);
-      vec2 f = fract(c);
-      float win = step(0.22, f.x)*step(f.x, 0.78)*step(0.28, f.y)*step(f.y, 0.72);
-      float lit = step(0.4, hash(floor(c) + floor(vW.xz*3.0)));
-      float tw = 0.7 + 0.3*sin(uT*2.0 + hash(floor(c))*40.0);
-      base += win*lit*tw*mix(vec3(1.0, 0.93, 0.75), vC, 0.35)*0.95*vOn;
-    }
-    if(vOn < 0.5) base = mix(vec3(dot(base, vec3(0.3, 0.59, 0.11))), base, 0.25)*0.32;
-    col = base;
-  }
-  float fog = 1.0 - exp(-length(vW - uEye)*uFog);
-  gl_FragColor = vec4(mix(col, uSky, fog), 1.0);
-}`;
-
-  function cityMesh(){
-    const S = 1.4, HW = 0.5;
-    const pal = palette(), dim = hexRGB(cssVar('--c13'));
-    const keys = MODELS.order || [], rank = {};
-    keys.forEach((m, i)=>{ rank[m] = i; });
-    const days = (MODELS.days || []).map(r=>{
-      let s = 0; for(const m in r[2]) s += r[2][m];
-      return {a: r[0], b: r[1], m: r[2], s};
-    }).sort((p, q)=>p.a-q.a);
-    const v = [];
-    const vert = (p, n, c, x, u)=>v.push(p[0],p[1],p[2], n[0],n[1],n[2], c[0],c[1],c[2],
-                                         x[0],x[1],x[2],x[3], u[0],u[1]);
-    const quad = (ps, n, c, x, us)=>[0,1,2,0,2,3].forEach(i=>vert(ps[i], n, c, x, us[i]));
-    let rows = 1, mxs = 0;
-    if(days.length){
-      const mid = t=>{ const d = new Date(t*1000); d.setHours(0,0,0,0); return d; };
-      const first = mid(days[0].a);
-      const mon = new Date(first); mon.setDate(first.getDate() - (first.getDay()+6)%7);
-      days.forEach(d=>{
-        const dd = mid(d.a);
-        const n = Math.round((dd - mon)/864e5);
-        d.col = (dd.getDay()+6)%7; d.row = Math.floor(n/7);
-        rows = Math.max(rows, d.row+1); mxs = Math.max(mxs, d.s);
-      });
-    }
-    const zo = Math.floor((rows-1)/2);
-    const HMAX = clamp(Math.max(rows, 7)*S*0.5, 5, 18);
-    const rnd = prng(11);
-    for(const d of days){
-      if(!d.s) continue;
-      const cx = (d.col-3)*S, cz = (d.row-zo)*S;
-      const x0 = cx-HW, x1 = cx+HW, z0 = cz-HW, z1 = cz+HW;
-      const segs = [];
-      let rest = d.s;
-      for(const m in d.m) if(m in rank){ segs.push([rank[m], d.m[m]]); rest -= d.m[m]; }
-      segs.sort((p, q)=>p[0]-q[0]);
-      if(rest > 0) segs.push([99, rest]);
-      const st = 0.75*d.row/rows + 0.25*rnd();
-      const X = k=>[rel(d.a), rel(d.b), k, st];
-      let y = 0;
-      segs.forEach(([r, val], j)=>{
-        const c = r < 99 ? pal[r%14] : dim;
-        const y1 = y + val/(mxs||1)*HMAX;
-        const U = [[0,y],[1,y],[1,y1],[0,y1]];
-        quad([[x1,y,z1],[x1,y,z0],[x1,y1,z0],[x1,y1,z1]], [1,0,0], c, X(0), U);
-        quad([[x0,y,z0],[x0,y,z1],[x0,y1,z1],[x0,y1,z0]], [-1,0,0], c, X(0), U);
-        quad([[x0,y,z1],[x1,y,z1],[x1,y1,z1],[x0,y1,z1]], [0,0,1], c, X(0), U);
-        quad([[x1,y,z0],[x0,y,z0],[x0,y1,z0],[x1,y1,z0]], [0,0,-1], c, X(0), U);
-        if(j === segs.length-1)
-          quad([[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], [0,1,0], c, X(2),
-               [[0,0],[1,0],[1,1],[0,1]]);
-        y = y1;
-      });
-    }
-    const G = Math.max(rows, 7)*S*3;
-    quad([[-G,0,-G],[G,0,-G],[G,0,G],[-G,0,G]], [0,1,0], [0,0,0], [-1e9, 1e9, 1, 0],
-         [[0,0],[1,0],[1,1],[0,1]]);
-    return {data: new Float32Array(v), R: Math.max(rows*S, 7*S), H: HMAX, S,
-            cz: ((rows-1)/2 - zo)*S};
-  }
-
-  // ---- Nebula: one arm per content category, time running outward from the core -------
-  const GAL_VS = `
-attribute vec3 aP; attribute vec3 aC; attribute vec4 aX;
-uniform mat4 uM; uniform vec2 uV; uniform float uPx; uniform float uG; uniform float uT;
-varying vec3 vC;
-void main(){
-  float on = (aX.y > uV.x && aX.x < uV.y) ? 1.0 : 0.0;
-  float bg = step(0.5, aX.w);
-  vec3 p = aP;
-  float g = clamp(uG*1.5 - length(p.xz)*0.035, 0.0, 1.0);
-  g = g*g*(3.0 - 2.0*g);
-  float a = (1.0 - g)*2.6*(1.0 - bg);
-  float c = cos(a), s = sin(a);
-  p.xz = mat2(c, -s, s, c)*p.xz*mix(1.0, g, 1.0 - bg);
-  vec4 q = uM*vec4(p, 1.0);
-  gl_Position = q;
-  float tw = 0.75 + 0.25*sin(uT*2.5 + aP.x*13.0 + aP.z*7.0);
-  float k = mix(mix(0.55, 1.0, on), tw, bg);
-  gl_PointSize = clamp(aX.z*uPx/q.w*k, 1.0, 42.0);
-  vC = aC*mix(mix(0.16, 1.0, on), tw, bg);
-}`;
-  const GAL_FS = `
-precision mediump float;
-varying vec3 vC;
-void main(){
-  vec2 d = gl_PointCoord - 0.5;
-  float r2 = dot(d, d)*4.0;
-  if(r2 > 1.0) discard;
-  gl_FragColor = vec4(vC*exp(-r2*3.2), 1.0);
-}`;
-
-  function galaxyMesh(){
-    let rows = CATS.series || [], order = CATS.order || [], bucket = CATS.bucket || 3600;
-    if(!rows.length){                 // nothing tokenized: spin the models instead
-      rows = (MODELS.days || []).map(r=>[r[0], r[2]]); order = MODELS.order || []; bucket = DAY;
-    }
-    const pal = palette(), idx = {};
-    order.forEach((k, i)=>{ idx[k] = i; });
-    const K = Math.max(1, Math.min(order.length || 1, 14));
-    const span = DOM ? Math.max(1, DOM[1]-DOM[0]) : 1;
-    const rnd = prng(7);
-    const gs = ()=>(rnd()+rnd()+rnd()-1.5)*2;
-    let plan = 0;
-    for(const r of rows) for(const k in r[1]) plan += 1 + Math.floor(Math.log2(1 + r[1][k]));
-    const scale = Math.min(1, 40000/(plan || 1));
-    const R = 11, v = [];
-    const star = (x, y, z, c, t0, t1, size, bg)=>v.push(x, y, z, c[0], c[1], c[2], t0, t1, size, bg);
-    for(const r of rows){
-      const t = r[0], p = DOM ? clamp((t + bucket/2 - DOM[0])/span, 0, 1) : 0.5;
-      const t0 = rel(t), t1 = rel(t + bucket);
-      for(const k in r[1]){
-        const n = r[1][k];
-        if(!(n > 0)) continue;
-        const i = (k in idx) ? idx[k] : 13;
-        const c = pal[i%14].map(x=>x*0.42);
-        const cnt = Math.max(1, Math.round((1 + Math.floor(Math.log2(1 + n)))*scale));
-        const spread = 0.06 + 0.015*Math.log10(n + 1);
-        for(let j=0;j<cnt;j++){
-          const rr = 1.2 + p*R + gs()*0.22;
-          const th = 2*Math.PI*(i%K)/K + p*2.3*Math.PI + gs()*spread;
-          star(Math.cos(th)*rr, gs()*0.16*(1.3 - 0.7*p), Math.sin(th)*rr, c, t0, t1,
-               0.035 + 0.02*Math.log10(n + 1)*rnd(), 0);
-        }
-      }
-    }
-    const warm = hexRGB(cssVar('--grid'));
-    for(let j=0;j<2600;j++){         // the core: always lit, it belongs to no range
-      const rr = Math.abs(gs())*0.9;
-      const th = rnd()*2*Math.PI;
-      const b = 0.05 + 0.1*rnd();
-      star(Math.cos(th)*rr, gs()*0.28*Math.max(0, 1 - rr/2), Math.sin(th)*rr,
-           warm.map(x=>x*b), -1e9, 1e9, 0.05 + 0.05*rnd(), 0);
-    }
-    for(let j=0;j<2400;j++){         // the sky behind it
-      const u = rnd()*2 - 1, th = rnd()*2*Math.PI, rr = 80 + rnd()*60, q = Math.sqrt(1 - u*u);
-      const b = 0.25 + 0.6*rnd()*rnd();
-      star(Math.cos(th)*q*rr, u*rr, Math.sin(th)*q*rr, [b*0.9, b*0.92, b], -1e9, 1e9,
-           0.18 + 0.3*rnd(), 1);
-    }
-    return {data: new Float32Array(v), R};
-  }
-
-  function build(k){
-    if(k === 'city'){
-      const m = cityMesh(), p = program(CITY_VS, CITY_FS);
-      return Object.assign(m, {p, k, mesh: upload(p, m.data,
-        [['aP',3], ['aN',3], ['aC',3], ['aX',4], ['aU',2]])});
-    }
-    const m = galaxyMesh(), p = program(GAL_VS, GAL_FS);
-    return Object.assign(m, {p, k, mesh: upload(p, m.data, [['aP',3], ['aC',3], ['aX',4]])});
-  }
-
-  function frame(now){
-    raf = requestAnimationFrame(frame);
-    if(document.hidden || !scene) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.round(innerWidth*dpr), h = Math.round(innerHeight*dpr);
-    if(cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; }
-    gl.viewport(0, 0, w, h);
-    const T = REDUCE ? 0 : now/1000;
-    const G = REDUCE ? 1 : Math.min(1, (now - born)/2200);
-    const max = Math.max(1, document.documentElement.scrollHeight - innerHeight);
-    sc += (clamp(scrollY/max, 0, 1) - sc)*0.08;
-    mx += (tmx - mx)*0.05; my += (tmy - my)*0.05;
-    const sky = hexRGB(cssVar('--sky'));
-    gl.clearColor(sky[0], sky[1], sky[2], 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const asp = w/h, wide = Math.pow(Math.max(1, 1.3/asp), 0.7);
-    const V = VIEW ? [rel(VIEW[0]), rel(VIEW[1])] : [-1e9, 1e9];
-    const p = scene.p;
-    gl.useProgram(p);
-    scene.mesh.bind();
-    let eye, tgt;
-    if(scene.k === 'city'){
-      const az = 0.7 + T*0.045 + mx*0.6, el = 0.3 + sc*0.85 - my*0.12;
-      const rad = (scene.R*0.9 + 7)*wide*(1.15 - sc*0.25);
-      tgt = [0, scene.H*0.18, scene.cz];
-      eye = [tgt[0] + Math.cos(az)*Math.cos(el)*rad, tgt[1] + Math.sin(el)*rad,
-             tgt[2] + Math.sin(az)*Math.cos(el)*rad];
-      gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
-      gl.uniform3fv(p.u('uSky'), sky);
-      gl.uniform3fv(p.u('uGrid'), hexRGB(cssVar('--grid')));
-      gl.uniform3fv(p.u('uEye'), eye);
-      gl.uniform1f(p.u('uFog'), 0.9/(rad*2.2));
-      gl.uniform1f(p.u('uCell'), scene.S);
-    } else {
-      const az = T*0.03 + mx*0.7, el = 1.05 - sc*0.8 - my*0.15;
-      const rad = scene.R*2.5*wide;
-      tgt = [0, 0, 0];
-      eye = [Math.cos(az)*Math.cos(el)*rad, Math.sin(el)*rad, Math.sin(az)*Math.cos(el)*rad];
-      gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-      gl.uniform1f(p.u('uPx'), h/(2*Math.tan(FOV/2)));
-    }
-    // The city is lifted in frame so it stands above the masthead rather than behind it.
-    const P = persp(FOV, asp, 0.1, 500);
-    if(scene.k === 'city') P[9] = -0.32;          // off-axis: NDC y moves up by this much
-    gl.uniformMatrix4fv(p.u('uM'), false, mul(P, look(eye, tgt)));
-    gl.uniform2f(p.u('uV'), V[0], V[1]);
-    gl.uniform1f(p.u('uG'), G);
-    gl.uniform1f(p.u('uT'), T);
-    gl.drawArrays(scene.k === 'city' ? gl.TRIANGLES : gl.POINTS, 0, scene.mesh.n);
-  }
-
-  addEventListener('pointermove', e=>{
-    if(e.pointerType !== 'mouse') return;
-    tmx = e.clientX/innerWidth*2 - 1; tmy = e.clientY/innerHeight*2 - 1;
-  });
-
-  return {
-    start(k){
-      if(!context()) return;
-      try{
-        if(scene && scene.mesh) gl.deleteBuffer(scene.mesh.buf);
-        scene = build(k); kind = k; born = performance.now();
-        if(!raf) raf = requestAnimationFrame(frame);
-      }catch(err){
-        scene = null; ROOT.classList.add('nogl');
-        console.warn('token-counter: scene off', err);
-      }
-    },
-    stop(){
-      if(raf) cancelAnimationFrame(raf);
-      raf = 0; kind = null;
-      if(scene && scene.mesh && gl) gl.deleteBuffer(scene.mesh.buf);
-      scene = null;
-    },
-  };
-})();
-
-// ---- the switch -----------------------------------------------------------------------
 let SI = 0;
 function applyStyle(i){
   SI = (i % STYLES.length + STYLES.length) % STYLES.length;
@@ -1175,7 +687,6 @@ function applyStyle(i){
   if(btn) btn.title = 'Next: ' + STYLES[(SI+1)%STYLES.length][1] + '  (shift-click or [ for previous)';
   try{ localStorage.setItem('tc-style', id); }catch(_){}
   try{ history.replaceState(null, '', '#style=' + id); }catch(_){}
-  if(Stage){ if(id === 'city' || id === 'galaxy') Stage.start(id); else Stage.stop(); }
   if(VIEW){ measure(); redraw(); }
 }
 
@@ -1193,6 +704,8 @@ function initStyles(){
   const m = /style=([a-z]+)/.exec((typeof location !== 'undefined' && location.hash) || '');
   if(m) id = m[1];
   if(!id){ try{ id = localStorage.getItem('tc-style'); }catch(_){} }
+  // A style this page no longer carries (a bookmark, or one remembered from an older
+  // report) falls back to the first rather than to nothing.
   const i = STYLES.findIndex(s=>s[0] === id);
   applyStyle(i >= 0 ? i : 0);
   const btn = byId('stylebtn');
@@ -1388,6 +901,103 @@ def _daily_svg(daily, order, domain):
     return ''.join(parts) + f'<div class="legend">{legend}</div>{miss}'
 
 
+# ---- the Matisse collage ------------------------------------------------------------------
+# Drawn once, here, from a fixed seed: the same torn edges every time the page opens, inline
+# SVG so nothing is fetched, and hidden by CSS under every other style.
+
+def _curve(pts):
+    """A closed Catmull-Rom curve through `pts`, as an SVG path of cubic Beziers."""
+    n = len(pts)
+    d = [f'M{pts[0][0]:.1f} {pts[0][1]:.1f}']
+    for i in range(n):
+        p0, p1, p2, p3 = pts[i - 1], pts[i], pts[(i + 1) % n], pts[(i + 2) % n]
+        d.append(f'C{p1[0] + (p2[0] - p0[0]) / 6:.1f} {p1[1] + (p2[1] - p0[1]) / 6:.1f} '
+                 f'{p2[0] - (p3[0] - p1[0]) / 6:.1f} {p2[1] - (p3[1] - p1[1]) / 6:.1f} '
+                 f'{p2[0]:.1f} {p2[1]:.1f}')
+    return ''.join(d) + 'Z'
+
+
+def _torn(rng, cx, cy, rx, ry, n=44, lump=.16, tear=.022):
+    """A sheet torn into a rough oval: two slow lobes for the shape, a fine tremor for the edge."""
+    f1, f2 = rng.uniform(0, 6.3), rng.uniform(0, 6.3)
+    pts = []
+    for i in range(n):
+        a = 2 * math.pi * i / n
+        r = 1 + lump * (.65 * math.sin(2 * a + f1) + .35 * math.sin(3 * a + f2)) + rng.uniform(-tear, tear)
+        pts.append((cx + rx * r * math.cos(a), cy + ry * r * math.sin(a)))
+    return _curve(pts)
+
+
+def _leaf(x, y, deg, ln, w, slit=True):
+    """An almond leaf from (x, y) pointing at `deg`, with the vein cut out of it."""
+    d = (f'M0 0C{ln * .25:.1f} {-w:.1f} {ln * .7:.1f} {-w * .9:.1f} {ln:.1f} 0'
+         f'C{ln * .7:.1f} {w * .9:.1f} {ln * .25:.1f} {w:.1f} 0 0Z')
+    if slit:
+        d += (f'M{ln * .34:.1f} {w * .08:.1f}C{ln * .5:.1f} {-w * .32:.1f} {ln * .7:.1f} {-w * .26:.1f} '
+              f'{ln * .82:.1f} {-w * .03:.1f}C{ln * .66:.1f} {w * .06:.1f} {ln * .5:.1f} {w * .14:.1f} '
+              f'{ln * .34:.1f} {w * .08:.1f}Z')
+    return (f'<path class="ink" fill-rule="evenodd" transform="translate({x} {y}) rotate({deg})" '
+            f'd="{d}"/>')
+
+
+def _flower(rng):
+    """Six pointed petals with seeds cut out of the heart, on a stem of cut leaves."""
+    cx, cy, petals = 150, 150, 6
+    turn = rng.uniform(0, 1)
+    d = []
+    for k in range(petals):
+        a = 2 * math.pi * (k + turn) / petals
+        tip = rng.uniform(88, 112)
+        v0, v1 = a - math.pi / petals, a + math.pi / petals
+        r0 = rng.uniform(30, 40)
+        p = lambda ang, r: (cx + r * math.cos(ang), cy + r * math.sin(ang))
+        start, t, c1, c2, end = (p(v0, r0), p(a + rng.uniform(-.08, .08), tip),
+                                 p(a - .3, tip * .78), p(a + .3, tip * .78), p(v1, r0))
+        if k == 0:
+            d.append(f'M{start[0]:.1f} {start[1]:.1f}')
+        d.append(f'Q{c1[0]:.1f} {c1[1]:.1f} {t[0]:.1f} {t[1]:.1f}Q{c2[0]:.1f} {c2[1]:.1f} {end[0]:.1f} {end[1]:.1f}')
+    d.append('Z')
+    for k in range(5):                         # the seeds: holes, so the sheet behind shows
+        a = 2 * math.pi * (k + .35 + turn) / 5
+        d.append(_torn(rng, cx + 19 * math.cos(a), cy + 19 * math.sin(a), 6, 4, n=8, lump=.2, tear=.08))
+    head = f'<path class="ink" fill-rule="evenodd" d="{"".join(d)}"/>'
+    stem = '<path class="stem" d="M162 196C176 262 170 322 196 392S214 520 262 640"/>'
+    leaves = ''.join([
+        _leaf(178, 300, -128, 96, 30), _leaf(186, 322, -52, 104, 32),
+        _leaf(206, 452, -150, 110, 34), _leaf(214, 478, -36, 92, 28),
+        _leaf(246, 590, -118, 70, 22, slit=False),
+        _leaf(62, 64, -150, 34, 11, slit=False), _leaf(48, 92, 170, 30, 10, slit=False),
+        _leaf(78, 40, -110, 28, 9, slit=False),
+    ])
+    return (f'<svg class="mz-flower" viewBox="-10 20 330 640" aria-hidden="true">'
+            f'{head}{stem}{leaves}</svg>')
+
+
+def _dashes(rng, rows, cols, cls):
+    """White brush dashes, leaning the same way, in loose diagonal rows."""
+    out, w, h = [], cols * 40 + rows * 16 + 60, rows * 44 + 60
+    for r in range(rows):
+        for c in range(cols):
+            if rng.random() < .12:
+                continue
+            ln = rng.uniform(34, 56)
+            x = 10 + c * 40 + r * 16 + rng.uniform(-5, 5)
+            y = 20 + r * 44 + rng.uniform(-6, 6)
+            a = math.radians(rng.uniform(56, 64))
+            out.append(f'<line class="dash" x1="{x:.1f}" y1="{y + ln * math.sin(a):.1f}" '
+                       f'x2="{x + ln * math.cos(a):.1f}" y2="{y:.1f}"/>')
+    return f'<svg class="{cls}" viewBox="0 0 {w} {h}" aria-hidden="true">{"".join(out)}</svg>'
+
+
+def _matisse():
+    rng = random.Random(1947)                  # the year of Jazz
+    return ('<div class="mz">'
+            f'<svg class="mz-sage" viewBox="0 0 700 560"><path class="sage" d="{_torn(rng, 350, 280, 300, 230)}"/></svg>'
+            f'<svg class="mz-rose" viewBox="0 0 560 460"><path class="rose" d="{_torn(rng, 280, 230, 240, 190)}"/></svg>'
+            f'{_dashes(rng, 4, 7, "mz-dash1")}{_dashes(rng, 5, 4, "mz-dash2")}{_flower(rng)}'
+            '</div>')
+
+
 def render(model):
     """The page: six headline numbers and three charts over one shared, zoomable range.
 
@@ -1489,8 +1099,7 @@ def render(model):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
-<canvas id="stage" aria-hidden="true"></canvas>
-<div class="deco" aria-hidden="true"><div class="sun"></div><div class="floor"><div class="plane"></div></div><div class="scan"></div><div class="wipe"></div></div>
+<div class="deco" aria-hidden="true">{_matisse()}<div class="wipe"></div></div>
 <nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button></div></nav>
 <div class="wrap">
 
@@ -1498,15 +1107,6 @@ def render(model):
   <div class="kicker"></div>
   <h1>Codex Token Report</h1>
   <p class="dek">{dek}</p>
-  <p class="caption cap-city">One tower per day, one row per week, Monday at the left; each tower is stacked by
-    the model charged, in the daily chart's colours. Towers in the charts' visible range are lit &mdash; drag
-    or zoom a chart below to scan the city. Scroll to lift the camera.</p>
-  <p class="caption cap-galaxy">One spiral arm per content category, in the composition pie's colours; time runs
-    outward from the core, and each hour of content adds stars in proportion to the log of its tokens.
-    Stars outside the charts' visible range fade.</p>
-  <dl class="tblock"><div><dt>Project</dt><dd>Codex usage</dd></div><div><dt>Drawn by</dt><dd>token-counter</dd></div>
-    <div><dt>Date</dt><dd>{time.strftime('%Y-%m-%d')}</dd></div><div><dt>Scale</dt><dd>1 tok : 1 tok</dd></div>
-    <div><dt>Sheet</dt><dd>1 of 1</dd></div></dl>
 </header>
 
 <div class="tiles">{tiles}</div>
