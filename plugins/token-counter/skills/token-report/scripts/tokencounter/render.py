@@ -1751,7 +1751,7 @@ const N3 = (()=>{
       W.push(word(s, .3, x, -.48, z + .025, {al: 'c', c: '--n-trim'}));
     }
   }
-  function title(W, s, x, y, z){ W.push(word(s, .46, x, y, z, {f: 'serif', c: '--fg'})); }
+  function title(W, s, x, y, z){ if(s) W.push(word(s, .46, x, y, z, {f: 'serif', c: '--fg'})); }
   /** A sentence broken into lines of at most n characters, at spaces. */
   function wrap(s, n = 46){
     const out = [];
@@ -1820,7 +1820,7 @@ const N3 = (()=>{
     }
     title(W, info.title, -2.1, H + HEAD_Y, zb);
     ticksOn(W, info.tk, info.view, 1.35, cx.measure, PW);
-    bx = union(union(bx, [-2.3, 0, -1.5, PW + 1.5, H + HEAD_Y + .5, 1.35]), extent(W, cx.measure));
+    bx = union(union(bx, [-2.3, 0, -1.5, PW + 1.5, H + (info.title ? HEAD_Y + .5 : TIP_Y + 1), 1.35]), extent(W, cx.measure));
     return {solid: G.v, glass, words: W, box: bx, hits, plot: {w: PW, h: H, z: 0}};
   }
 
@@ -1848,7 +1848,7 @@ const N3 = (()=>{
     title(W, info.title, -1, H + HEAD_Y, 0);
     if(info.peak) W.push(word(info.peak, .28, 0, H + .25, 0, {c: '--dim'}));
     ticksOn(W, info.tk, info.view, 1.2, cx.measure, PW);
-    bx = union(union(bx, [-1.2, 0, -1.2, PW + 1.2, H + HEAD_Y + .5, 1.2]), extent(W, cx.measure));
+    bx = union(union(bx, [-1.2, 0, -1.2, PW + 1.2, H + (info.title ? HEAD_Y + .5 : TIP_Y + 1), 1.2]), extent(W, cx.measure));
     return {solid: G.v, glass: [], words: W, box: bx, hits, plot: {w: PW, h: H, z: 0}};
   }
 
@@ -2404,8 +2404,8 @@ void main(){
 
   // -- the exhibits -------------------------------------------------------------------------------
   const TITLES = {
-    windows: 'Cumulative tokens per weekly limit window',
-    daily: 'Daily recorded input, stacked by model',
+    windows: '',                                       // the time charts need no heading
+    daily: '',
     content: 'What filled the window',
     models: 'Recorded input by model',
   };
