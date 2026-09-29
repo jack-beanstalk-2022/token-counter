@@ -991,8 +991,16 @@ handed to both — so a date sits at the same x in each and a spike in one can b
 day in the other. The domain covers the limit series, the daily buckets and the content
 buckets, so nothing the page can draw falls outside it.
 
-The viewport is shared. Scrolling, dragging or pinching **either** chart moves both, and the
-toolbar above them (range, zoom in/out, reset) drives the same state. **Zoom is horizontal
+The viewport is shared. Scrolling, dragging or pinching **either** chart moves both, and a
+double-click on either returns both to the full range. Wheel zoom and the double-click
+**glide** rather than jump, in every style: the view eases toward its goal over about a
+quarter of a second, as a true zoom -- the moment that sits at the same x in the view it
+leaves and the view it reaches stays put the whole way, and the span changes geometrically --
+and wheel turns that land mid-glide steer the goal, so a fast spin runs as one motion. A drag
+or a pinch follows the hand directly and takes over from a glide at once;
+`prefers-reduced-motion` jumps. **Zoomed all the way out, scrolling down scrolls the page.**
+A wheel gesture (events under 250 ms apart) stays with whatever it started on, so a swipe
+that zooms out to the full range spends its momentum on the chart, and the next one scrolls. **Zoom is horizontal
 only.** Each chart's value axis is fixed over the corpus, never over the viewport, so a bar's
 height and a curve's height mean the same thing at every zoom level; rescaling y to the
 visible slice would make two views of the same chart quietly incomparable.
