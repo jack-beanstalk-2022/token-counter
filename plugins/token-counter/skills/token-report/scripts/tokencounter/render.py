@@ -33,7 +33,7 @@ DAILY_H, DAILY_T, DAILY_B = 210, 18, 34
 
 # The page styles, in the order the button cycles them; the first is the default.  The page
 # reads this list from its payload, so it is written down once.
-STYLES = [('clinical', 'Clinical'), ('matisse', 'Matisse')]
+STYLES = [('clinical', 'Clinical'), ('matisse', 'Matisse'), ('ghibli', 'Ghibli')]
 
 CSS = """
 :root{
@@ -93,7 +93,7 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 # a generic family.  Matisse's categorical palette (--c0..--c12, with --c13 a neutral for
 # `other`) is checked for colour-vision separation against its own panel: neighbouring slots,
 # and every pair among the first four, which is as many models as most corpora have.
-# Clinical's predates that check and does not pass it (--c0 and --c1 converge under
+# Ghibli's passes the same checks.  Clinical's predates that check and does not pass it (--c0 and --c1 converge under
 # deuteranopia).
 STYLE_CSS = r"""
 /* ---- shared chrome: the style bar, the masthead, the switch ---------------------------- */
@@ -200,6 +200,69 @@ STYLE_CSS = r"""
   [data-style="matisse"] .mast{padding-top:40px;min-height:0}
   [data-style="matisse"] .kicker{max-width:64%}
   [data-style="matisse"] .tile .v{font-size:32px}}
+/* ---- 3. GHIBLI: a painted summer afternoon ------------------------------------------- */
+/* A hand-painted sky that fades to haze at the horizon, cumulus drifting across it, layered
+   meadow hills with a tree and a red-roofed house, and the report on warm watercolour paper.
+   The scenery is drawn here from scratch -- no character, logo or frame from any film. */
+:root[data-style="ghibli"]{color-scheme:light;
+  --bg:#eef5ea;--panel:#fbf7ec;--line:#e2dccb;--fg:#26362f;--dim:#5b675f;
+  --cached:#bfdcea;--uncached:#246293;--out:#179d8e;--warn:#a84e49;--warn-bg:#f5e1d6;
+  --c0:#246293;--c1:#a84e49;--c2:#179d8e;--c3:#b2861c;--c4:#0c6701;--c5:#d96c91;--c6:#1297cd;
+  --c7:#733174;--c8:#8a6604;--c9:#7169cd;--c10:#974479;--c11:#4d882e;--c12:#3b6fc4;--c13:#8e8a7a;
+  --sky:#7fbfe0;--meadow:#74ad6a;--sun:#f3cf7a;--roof:#c4543c;
+  --title:"Hiragino Mincho ProN","Yu Mincho","YuMincho","Iowan Old Style","Palatino Linotype",
+    Palatino,Georgia,serif;
+  --kicker:"Codex usage, recounted locally \00B7  under a summer sky"}
+[data-style="ghibli"] body{font:15px/1.6 "Nunito","Varela Round","Hiragino Maru Gothic ProN","Quicksand",
+  "Segoe UI","Trebuchet MS",system-ui,sans-serif;
+  background:linear-gradient(180deg,#6fb3db 0,#a7d6ea 38%,#dff0ee 72%,#eef5ea 100%) fixed #eef5ea}
+[data-style="ghibli"] .wrap{position:relative;z-index:1}
+[data-style="ghibli"] nav.bar{background:rgba(255,255,255,.5);border-bottom:1px solid rgba(255,255,255,.7);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+[data-style="ghibli"] .brand{font:600 18px/1 var(--title);color:#1f3b4d;letter-spacing:.02em}
+[data-style="ghibli"] #stylebtn{background:var(--panel);border:1px solid rgba(36,98,147,.25);color:var(--fg);
+  box-shadow:0 4px 14px -6px rgba(30,70,90,.45)}
+[data-style="ghibli"] .keys{color:#1f3b4d}
+[data-style="ghibli"] .mast{padding:72px 0 44px;min-height:34vh}
+[data-style="ghibli"] .kicker{color:#1f3b4d;text-transform:none;letter-spacing:.06em;font-size:14px;
+  font-style:italic;opacity:.85}
+[data-style="ghibli"] .mast h1{font:600 clamp(42px,7.4vw,88px)/1.02 var(--title);color:#1b3446;
+  letter-spacing:.01em;margin:10px 0 16px;text-shadow:0 2px 18px rgba(255,255,255,.55)}
+[data-style="ghibli"] .dek{display:inline-block;color:#1f3b4d;background:rgba(251,247,236,.72);
+  padding:6px 14px;border-radius:999px;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+[data-style="ghibli"] .tiles{gap:16px}
+[data-style="ghibli"] .tile{border:0;border-radius:16px;padding:16px 18px 16px;
+  background:linear-gradient(var(--wash,var(--sky)) 0 6px,var(--panel) 6px);
+  box-shadow:0 10px 28px -14px rgba(30,70,60,.45)}
+[data-style="ghibli"] .tile:nth-child(4n+2){--wash:var(--meadow)}
+[data-style="ghibli"] .tile:nth-child(4n+3){--wash:var(--sun)}
+[data-style="ghibli"] .tile:nth-child(4n+4){--wash:var(--roof)}
+[data-style="ghibli"] .tile .k{text-transform:none;letter-spacing:.02em;font-size:12.5px;font-weight:600}
+[data-style="ghibli"] .tile .v{font:600 32px/1.15 var(--title);margin-top:6px}
+[data-style="ghibli"] .panel{border:0;border-radius:18px;padding:18px 20px;margin-top:18px;
+  box-shadow:0 14px 34px -18px rgba(30,70,60,.5)}
+[data-style="ghibli"] .legend i{border-radius:50%}
+[data-style="ghibli"] .deco .gb{display:block}
+.gb{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.gb svg{position:absolute;display:block;overflow:visible}
+.gb-sun{position:absolute;right:-12vw;top:-18vh;width:70vw;height:70vw;max-width:900px;max-height:900px;
+  background:radial-gradient(closest-side,rgba(255,244,214,.95),rgba(255,236,190,.35) 45%,transparent)}
+.gb .puff{fill:#fff} .gb .shade{fill:#dfe5f1}
+.gb-c1{left:-4vw;top:12vh;width:min(46vw,560px);animation:drift 90s ease-in-out infinite alternate}
+.gb-c2{right:4vw;top:26vh;width:min(34vw,420px);animation:drift 120s ease-in-out -40s infinite alternate-reverse}
+.gb-c3{left:34vw;top:12vh;width:min(22vw,260px);opacity:.9;animation:drift 70s ease-in-out -20s infinite alternate}
+.gb-hills{left:0;bottom:0;width:100%;height:30vh}
+.gb-farm{right:6vw;bottom:14vh;width:min(22vw,240px)}
+.gb .far{fill:#a9cdb2} .gb .mid{fill:#7fb46f} .gb .near{fill:#5a9a4b}
+.gb .leaf{fill:#3f7a3a} .gb .leaf2{fill:#4f8c43} .gb .trunk{fill:#5b4331}
+.gb .wall{fill:#f4ead2} .gb .roof{fill:var(--roof)} .gb .win{fill:#35556b}
+@keyframes drift{from{transform:translateX(-3vw)}to{transform:translateX(6vw)}}
+@media(prefers-reduced-motion:reduce){.gb svg{animation:none}}
+@media(max-width:640px){
+  .gb-c1{width:80vw;top:10vh} .gb-c2{width:60vw;top:30vh} .gb-c3{display:none}
+  .gb-farm{width:40vw;bottom:12vh}
+  [data-style="ghibli"] .mast{padding-top:44px;min-height:0}
+  [data-style="ghibli"] .tile .v{font-size:26px}}
 """
 
 JS = """
@@ -998,6 +1061,60 @@ def _matisse():
             '</div>')
 
 
+# ---- the Ghibli scenery -------------------------------------------------------------------
+# Summer sky, cumulus and a hillside farm, drawn from scratch and from a fixed seed like the
+# Matisse collage: the same scene on every render, nothing fetched, hidden by CSS elsewhere.
+
+def _cumulus(rng, cls, w=400, h=190):
+    """A cumulus: a heap of puffs, tallest in the middle, over a flat, shaded base."""
+    puffs, n = [], 9
+    for i in range(n):
+        x = 40 + (w - 80) * i / (n - 1) + rng.uniform(-12, 12)
+        mid = 1 - abs(i - (n - 1) / 2) / ((n - 1) / 2)          # 1 at the centre, 0 at the ends
+        r = 34 + 52 * mid + rng.uniform(-8, 10)
+        puffs.append((x, h - 40 - r * .55 - 18 * mid, r))
+    shade = ''.join(f'<circle class="shade" cx="{x:.1f}" cy="{y + 12:.1f}" r="{r:.1f}"/>' for x, y, r in puffs)
+    white = ''.join(f'<circle class="puff" cx="{x:.1f}" cy="{y:.1f}" r="{r:.1f}"/>' for x, y, r in puffs)
+    return (f'<svg class="{cls}" viewBox="0 0 {w} {h}" aria-hidden="true">'
+            # The white is trimmed a little higher than its shadow, so the flat base shows
+            # a lavender underside, the way a lit cumulus does.
+            f'<clipPath id="{cls}-lo"><rect x="-60" y="-200" width="{w + 120}" height="{h + 170}"/></clipPath>'
+            f'<clipPath id="{cls}-hi"><rect x="-60" y="-200" width="{w + 120}" height="{h + 158}"/></clipPath>'
+            f'<g clip-path="url(#{cls}-lo)">{shade}</g><g clip-path="url(#{cls}-hi)">{white}</g></svg>')
+
+
+def _ridge(rng, y, amp, cls, n=7):
+    """One hill line across the full width, closed down to the bottom edge."""
+    pts = [(-50, y)] + [(1000 * i / (n - 1), y - amp * rng.uniform(.3, 1)) for i in range(n)] + [(1050, y)]
+    d = f'M{pts[0][0]} {pts[0][1]:.1f}'
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        mx = (x0 + x1) / 2
+        d += f'C{mx:.1f} {y0:.1f} {mx:.1f} {y1:.1f} {x1:.1f} {y1:.1f}'
+    return f'<path class="{cls}" d="{d}L1050 300L-50 300Z"/>'
+
+
+def _farm():
+    """A lone tree beside a small house with a red roof."""
+    canopy = ''.join(f'<circle class="{c}" cx="{x}" cy="{y}" r="{r}"/>' for c, x, y, r in (
+        ('leaf', 70, 70, 44), ('leaf', 40, 96, 34), ('leaf', 104, 94, 36), ('leaf2', 62, 50, 30),
+        ('leaf2', 92, 62, 28), ('leaf2', 50, 80, 22)))
+    return ('<svg class="gb-farm" viewBox="0 0 260 170" aria-hidden="true">'
+            '<rect class="trunk" x="64" y="104" width="12" height="52" rx="4"/>' + canopy +
+            '<rect class="wall" x="150" y="104" width="84" height="54" rx="2"/>'
+            '<path class="roof" d="M140 108L192 70L244 108Z"/>'
+            '<rect class="win" x="162" y="118" width="16" height="14" rx="2"/>'
+            '<rect class="win" x="204" y="118" width="16" height="30" rx="2"/></svg>')
+
+
+def _ghibli():
+    rng = random.Random(1986)
+    hills = ('<svg class="gb-hills" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">'
+             f'{_ridge(rng, 150, 70, "far")}{_ridge(rng, 200, 60, "mid")}{_ridge(rng, 252, 44, "near")}</svg>')
+    return ('<div class="gb"><div class="gb-sun"></div>'
+            f'{_cumulus(rng, "gb-c1")}{_cumulus(rng, "gb-c2")}{_cumulus(rng, "gb-c3", 300, 150)}'
+            f'{hills}{_farm()}</div>')
+
+
 def render(model):
     """The page: six headline numbers and three charts over one shared, zoomable range.
 
@@ -1099,7 +1216,7 @@ def render(model):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
-<div class="deco" aria-hidden="true">{_matisse()}<div class="wipe"></div></div>
+<div class="deco" aria-hidden="true">{_matisse()}{_ghibli()}<div class="wipe"></div></div>
 <nav class="bar"><div class="brand">token-counter</div><div><span class="keys">[ ]</span><button id="stylebtn" type="button" aria-label="Cycle the page style"><span class="sw-l">Style</span><b id="stylename">{first[1]}</b><span id="styleidx">1/{len(STYLES)}</span><span class="sw-go" aria-hidden="true">&#8635;</span></button></div></nav>
 <div class="wrap">
 

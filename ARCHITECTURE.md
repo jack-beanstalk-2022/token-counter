@@ -926,8 +926,8 @@ Every figure derived from inference rather than measurement carries a visible `i
 badge; measurements carry a neutral `measured` badge. The page opens with a standing note
 that these are *recorded*, not billed, counts.
 
-**Styles.** The page carries two styles over one markup — **Clinical** (the original look,
-light or dark with the system, and the default) and **Matisse** — cycled by the button in the
+**Styles.** The page carries three styles over one markup — **Clinical** (the original look,
+light or dark with the system, and the default), **Matisse** and **Ghibli** — cycled by the button in the
 top bar or `[` / `]`, and remembered in `localStorage` and the URL hash (`#style=matisse`); a
 remembered style the page no longer carries falls back to the first. A style is CSS keyed on
 `html[data-style]`; every chart colour is a CSS variable, so the charts restyle without being
@@ -936,11 +936,16 @@ redrawn except to re-measure a panel whose width changed. **Matisse** is the lat
 white brush dashes, and an ink flower on a stem of cut leaves. Tiles are gouache cut-outs,
 each panel sits a few millimetres out of register over a coloured sheet, and pie slices are
 cut apart. The collage is inline SVG drawn in Python from a fixed seed — the same edges every
-time, nothing fetched — and hidden under every other style. Its categorical palette is
-checked for colour-vision separation against its own panel: neighbouring slots, and every
+time, nothing fetched — and hidden under every other style. **Ghibli** is a painted summer
+afternoon: a sky fading to haze at the horizon, a sun glow, cumulus with lavender undersides
+drifting slowly across it, layered meadow hills with a tree and a red-roofed house, and the
+report on warm watercolour paper, each tile topped with a wash of sky, meadow, sun or roof.
+Its scenery is drawn the same way and from scratch — no character, logo or frame from any
+film. Both palettes are
+checked for colour-vision separation against their own panels: neighbouring slots, and every
 pair among the first four. (Clinical's palette predates that check and does not pass it: its
-first two slots converge under deuteranopia.) `prefers-reduced-motion` stills the flower and
-the switch's fade.
+first two slots converge under deuteranopia.) `prefers-reduced-motion` stills the flower, the
+clouds and the switch's fade.
 
 ### 7.1 One time axis, one viewport
 
