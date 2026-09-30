@@ -3067,9 +3067,11 @@ function initStyles(){
   if(m) id = m[1];
   if(!id){ try{ id = localStorage.getItem('tc-style'); }catch(_){} }
   // A style this page no longer carries (a bookmark, or one remembered from an older
-  // report) falls back to the first rather than to nothing.
+  // report) falls back to the one the page was rendered in: the first, or the style the
+  // sharer picked for a shared page, whose readers have nothing remembered.
+  const own = STYLES.findIndex(s=>s[0] === (ROOT.getAttribute && ROOT.getAttribute('data-style')));
   const i = STYLES.findIndex(s=>s[0] === id);
-  applyStyle(i >= 0 ? i : 0);
+  applyStyle(i >= 0 ? i : Math.max(own, 0));
   const btn = byId('stylebtn');
   if(btn) btn.addEventListener('click', e=>cycle(e.shiftKey ? -1 : 1));
   document.addEventListener('keydown', e=>{
@@ -3360,12 +3362,17 @@ def _matisse():
             '</div>')
 
 
-def render(model):
+def render(model, public=False, style=None):
     """The page: six headline numbers and three charts over one shared, zoomable range.
 
     Everything else the model carries -- sessions, reconciliation, images, the window table,
     the data-quality counters and the disclosures that went with them -- is reported through
     `--json` and the stdout summary, not here.
+
+    `public` is the page token-share publishes: the same page, less the two strings on it
+    that come from the machine rather than from counting -- the top session's id and the
+    name of its working directory.  `style` is the style the page opens in when the reader
+    has none of their own remembered; the first by default.
     """
     t = model['totals']
     rl = model.get('rate_limits') or {}
@@ -3394,8 +3401,8 @@ def render(model):
     top_tile = []
     if top:
         where = os.path.basename((top.get('cwd') or '').rstrip('/\\'))
-        top_note = ' &middot; '.join(html.escape(x) for x in
-                                     (str(top['session_id'])[:8], where) if x)
+        top_note = '' if public else ' &middot; '.join(html.escape(x) for x in
+                                                       (str(top['session_id'])[:8], where) if x)
         top_tile = [tile('Longest session', big(top['input']), top_note)]
 
     tiles = ''.join([
@@ -3456,7 +3463,8 @@ def render(model):
     dek = ' &middot; '.join(x for x in (
         f'{fmt(domain[0])} &ndash; {fmt(domain[1])}' if domain else '',
         f"{t['sessions']:,} sessions", f"{t['responses']:,} responses") if x)
-    first, nxt = STYLES[0], STYLES[1 % len(STYLES)]
+    at = next((i for i, (sid, _) in enumerate(STYLES) if sid == style), 0)
+    first, nxt = STYLES[at], STYLES[(at + 1) % len(STYLES)]
 
     return f"""<!doctype html>
 <html lang="en" data-style="{first[0]}"><head><meta charset="utf-8">

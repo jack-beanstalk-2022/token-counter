@@ -4,6 +4,8 @@ Run with ``python scripts/test_share.py``. No network: the server is a stub on l
 """
 import contextlib
 import datetime
+import gzip
+import base64
 import http.server
 import io
 import json
@@ -313,6 +315,16 @@ class Stub(http.server.BaseHTTPRequestHandler):
         return self._send(200, {'handle': body.get('handle') or 'tester',
                                 'url': 'http://x/u/tester', 'created': False})
 
+    def do_PUT(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        body = json.loads(self.rfile.read(n))
+        auth = self.headers.get('Authorization')
+        Stub.calls.append(('PUT', self.path, auth, body))
+        if auth != f'Bearer {Stub.token}':
+            return self._send(401, {'error': 'bad_token', 'message': 'not recognised'})
+        page = gzip.decompress(base64.b64decode(body['html_gz']))
+        self._send(200, {'handle': 'tester', 'url': 'http://x/r/tester', 'bytes': len(page)})
+
     def do_DELETE(self):
         Stub.calls.append(('DELETE', self.path, self.headers.get('Authorization'), None))
         self._send(200, {'deleted': True, 'handle': 'tester'})
@@ -328,6 +340,14 @@ def _server():
         yield f'http://127.0.0.1:{srv.server_address[1]}/api'
     finally:
         srv.shutdown()
+
+
+def _last(method):
+    return next((c for c in reversed(Stub.calls) if c[0] == method), None)
+
+
+def _page(call):
+    return gzip.decompress(base64.b64decode(call[3]['html_gz'])).decode('utf-8')
 
 
 def _run(root, home, *argv):
@@ -358,16 +378,35 @@ def test_transport():
         check('a dry run sends nothing', rc == 0 and not Stub.calls and 'dry run' in out, out)
         check('a dry run says what would be shared', '2026-09' in out and 'never sent' in out, out)
         check('a dry run says what it sends about rate limits', 'limit window' in out, out)
+        shared = os.path.join(home, 'token-counter', 'report-shared.html')
+        check('a dry run writes the report page it would publish, and names it',
+              os.path.exists(shared) and shared in out and 'anyone with the link' in out, out)
+        with open(shared, encoding='utf-8') as fh:
+            dry_page = fh.read()
+        check('the shared page is the token report',
+              dry_page.startswith('<!doctype html>') and 'Codex Token Report' in dry_page
+              and 'data-style="clinical"' in dry_page)
+        leaked = [x for x in (SECRET_PROMPT, SECRET_CWD, os.path.basename(SECRET_CWD),
+                              *(sid for sid, _, _ in CORPUS), *(sid[:8] for sid, _, _ in CORPUS))
+                  if x in dry_page]
+        check('the shared page carries no prompt, directory or session id', not leaked, str(leaked))
 
         rc, _, err = _run(root, home, '--api', api, '--yes')
         check('a first share without a handle is refused locally',
               rc == 2 and not Stub.calls and '--handle' in err, err)
 
         rc, out, err = _run(root, home, '--api', api, '--handle', 'Tester', '--yes')
-        check('a first share registers and prints the profile URL',
-              rc == 0 and out.strip().endswith('http://x/u/tester'), out + err)
-        check('the handle is sent lowercased', Stub.calls[-1][3].get('handle') == 'tester')
-        check('the first share sends no token', Stub.calls[-1][2] is None)
+        check('a first share prints the profile URL, then the report URL last',
+              rc == 0 and 'http://x/u/tester' in out
+              and out.strip().endswith('report: http://x/r/tester'), out + err)
+        check('the handle is sent lowercased', _last('POST')[3].get('handle') == 'tester')
+        check('the first share sends no token', _last('POST')[2] is None)
+        put = _last('PUT')
+        check('the report page goes up after the numbers, under the new token',
+              Stub.calls[-1] is put and put[1] == '/api/report'
+              and put[2] == f'Bearer {Stub.token}' and put[3]['schema'] == 1)
+        with open(shared, encoding='utf-8') as fh:
+            check('the page sent is the page the dry run showed', _page(put) == fh.read())
         with open(state, encoding='utf-8') as fh:
             saved = json.load(fh)['endpoints'][api]
         check('the token is stored', saved.get('token') == Stub.token and saved['handle'] == 'tester')
@@ -378,12 +417,34 @@ def test_transport():
 
         rc, out, _ = _run(root, home, '--api', api, '--yes')
         check('a later share authenticates and leaves the handle out',
-              rc == 0 and Stub.calls[-1][2] == f'Bearer {Stub.token}'
-              and 'handle' not in Stub.calls[-1][3], str(Stub.calls[-1][:3]))
+              rc == 0 and _last('POST')[2] == f'Bearer {Stub.token}'
+              and 'handle' not in _last('POST')[3], str(_last('POST')[:3]))
 
+        n = len(Stub.calls)
+        rc, out, _ = _run(root, home, '--api', api, '--yes', '--no-report')
+        check('--no-report shares the numbers only',
+              rc == 0 and [c[0] for c in Stub.calls[n:]] == ['POST'], str(Stub.calls[n:]))
+
+        rc, out, _ = _run(root, home, '--api', api, '--yes', '--style', 'matisse')
+        check('--style is the style the shared page opens in',
+              rc == 0 and '<html lang="en" data-style="matisse">' in _page(_last('PUT'))
+              and 'data-next="nocturne"' in _page(_last('PUT')), out)
+
+        n = len(Stub.calls)
+        rc, out, _ = _run(root, home, '--api', api, '--delete-report')
+        check('--delete-report without --yes only says what it would do',
+              rc == 0 and len(Stub.calls) == n and 'would take down' in out, out)
+        rc, out, _ = _run(root, home, '--api', api, '--delete-report', '--yes')
+        with open(state, encoding='utf-8') as fh:
+            kept = json.load(fh)['endpoints'].get(api) or {}
+        check('--delete-report takes the page down and keeps the token',
+              rc == 0 and Stub.calls[-1][:2] == ('DELETE', '/api/report')
+              and kept.get('token') == Stub.token and 'report_url' not in kept, out)
+
+        n = len(Stub.calls)
         rc, out, _ = _run(root, home, '--api', api, '--delete')
         check('delete without --yes only says what it would do',
-              rc == 0 and Stub.calls[-1][0] == 'POST' and 'would delete' in out, out)
+              rc == 0 and len(Stub.calls) == n and 'would delete' in out, out)
         rc, out, _ = _run(root, home, '--api', api, '--delete', '--yes')
         with open(state, encoding='utf-8') as fh:
             left = json.load(fh)['endpoints']

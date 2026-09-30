@@ -295,6 +295,12 @@ def main(argv=None):
     ap.add_argument('--out', metavar='PATH', help='HTML output path')
     ap.add_argument('--json', metavar='PATH', help='write the report model as JSON')
     ap.add_argument('--no-open', action='store_true', help='do not open the browser')
+    ap.add_argument('--style', choices=[sid for sid, _ in render.STYLES],
+                    help='the style the page opens in (default: the first, or the last one '
+                         'picked in this browser)')
+    ap.add_argument('--public', action='store_true',
+                    help='the page token-share publishes: no session id or directory name, '
+                         'and auth.json is not read')
     ap.add_argument('--no-account', action='store_true',
                     help='do not read ~/.codex/auth.json; the report then names no account')
     ap.add_argument('--vocab', metavar='PATH', help='override the vendored BPE path')
@@ -307,6 +313,8 @@ def main(argv=None):
 
     if a.doctor:
         return doctor(a)
+    if a.public:
+        a.no_account = True
 
     # Measured (scripts/bench.py, 16 logical cores): processes scale cleanly; tokenizer
     # threads cost more CPU for less throughput at every point, so the thread axis defaults
@@ -449,7 +457,7 @@ def main(argv=None):
         suffix = (a.session[:8] if a.session else
                   ('-'.join(x for x in (a.since, a.until) if x) or 'all'))
         out = a.out or os.path.join(out_dir(), f'report-{suffix}.html')
-        page = render.render(model)
+        page = render.render(model, public=a.public, style=a.style)
         try:
             with open(out, 'w', encoding='utf-8') as fh:
                 fh.write(page)
