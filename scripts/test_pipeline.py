@@ -674,7 +674,10 @@ def test_render():
     hostile = '</script><img src=x onerror=alert(1)> &"<'
     model2 = dict(model)
     model2['models'] = [dict(model['models'][0], model=hostile)]
-    model2['daily'] = [dict(d, models={hostile: d['input']}) for d in model['daily']]
+    # Both splits: the chart draws the tiktoken one when the run counted input (§5.7).
+    model2['daily'] = [dict(d, models={hostile: d['input']},
+                            tiktoken_models={hostile: d['tiktoken_input']})
+                       for d in model['daily']]
     h2 = render.render(model2)
     check('hostile rollout content cannot close the script block',
           '</script><img' not in h2 and h2.count('</script>') == 2,
@@ -1281,6 +1284,124 @@ def test_daily_model_split():
           chart[-400:])
 
 
+def _counted_corpus():
+    """Two sessions on two days with real prompt text, cached tokens, two models and a weekly
+    limit window: everything the input switch touches (§5.7)."""
+    d = tempfile.mkdtemp()
+    t0 = 1789000000
+    reset = t0 + WEEK
+    iso = lambda t: (datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+                     .isoformat().replace('+00:00', 'Z'))
+
+    def session(sid, model, start, n, words):
+        recs = [_rec('session_meta', {'session_id': sid, 'id': sid}, 0),
+                {'timestamp': iso(start), 'type': 'turn_context',
+                 'payload': {'model': model, 'effort': 'high'}}]
+        cum = 0
+        for i in range(n):
+            recs.append({'timestamp': iso(start + i * 600), 'type': 'response_item',
+                         'payload': {'type': 'message', 'role': 'user', 'content': [
+                             {'type': 'input_text',
+                              'text': f'question {i}: ' + 'lorem ipsum dolor ' * words}]}})
+            cum += 5000
+            tc = _tc(start + i * 600 + 1, 10.0 * (i + 1), reset, cum, 5000)
+            tc['payload']['info']['last_token_usage']['cached_input_tokens'] = 2000
+            recs.append(tc)
+        return recs
+
+    _write(d, 'rollout-2026-09-10T00-00-00-a.jsonl', session('A', 'm1', t0, 3, 40))
+    _write(d, 'rollout-2026-09-11T00-00-00-b.jsonl', session('B', 'm2', t0 + 36 * 3600, 2, 400))
+    return d
+
+
+def test_input_counted_with_tiktoken():
+    """Input on the page is tiktoken's count of each response's reconstructed prompt; output,
+    cached and the cache hit stay Codex's; `--metrics-only` shows Codex's input as before."""
+    import report as cli
+    corpus = _counted_corpus()
+
+    def run(*extra):
+        out = tempfile.mkdtemp()
+        j, h = os.path.join(out, 'm.json'), os.path.join(out, 'r.html')
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            rc = cli.main(['--sessions-root', corpus, '--no-open', '--no-account', '--quiet',
+                           '--no-cache', '--procs', '1', '--json', j, '--out', h, *extra])
+        with open(j, encoding='utf-8') as fh:
+            model = json.load(fh)
+        with open(h, encoding='utf-8') as fh:
+            return rc, model, fh.read(), buf.getvalue()
+
+    rc, m, page, out = run()
+    _, mo, page_mo, out_mo = run('--metrics-only')
+    t, to = m['totals'], mo['totals']
+    check('input is counted with tiktoken: the sum of the reconstructed prompts',
+          rc == 0 and t['input_source'] == 'tiktoken' and t['tiktoken_input'] > 0
+          and t['tiktoken_input'] == m['residual']['reconstructed']
+          and t['tiktoken_input'] != t['input'], str(t))
+    check('output, cached and the cache hit are still what Codex recorded',
+          (t['input'], t['cached'], t['output'], t['reasoning'], t['cache_hit'])
+          == (to['input'], to['cached'], to['output'], to['reasoning'], to['cache_hit'])
+          == (25000, 10000, 50, 0, 0.4), f'{t}\n{to}')
+    check('every response had a prompt to count, so none fell back to Codex\'s figure',
+          m['quality'].get('tiktoken_input_fallback') == 0, str(m['quality']))
+
+    days = m['daily']
+    check('each day splits its tiktoken input by model, and keeps Codex\'s split beside it',
+          len(days) == 2
+          and all(sum(d['tiktoken_models'].values()) == d['tiktoken_input'] for d in days)
+          and all(sum(d['models'].values()) == d['input'] for d in days)
+          and sum(d['tiktoken_input'] for d in days) == t['tiktoken_input']
+          and [(d['input'], d['cached']) for d in days]
+          == [(d['input'], d['cached']) for d in mo['daily']],
+          str(days))
+    w = m['rate_limits']['windows']
+    check('the limit curve runs on tiktoken input; the window keeps Codex\'s figures too',
+          len(w) == 1 and w[0]['tokens']['tiktoken_input'] == t['tiktoken_input']
+          and w[0]['cum_points'][-1][4] == t['tiktoken_input']
+          and w[0]['tokens']['input'] == t['input'], json.dumps(w)[:400])
+    s = m['sessions']
+    check('sessions rank by tiktoken input, which puts the other session on top here',
+          [x['session_id'] for x in s] == ['B', 'A'] and s[0]['input'] < s[1]['input'],
+          str([(x['session_id'], x['input'], x['tiktoken_input']) for x in s]))
+
+    tiles = page[page.index('class="tiles"'):page.index('id="rlchart"')]
+    check('the page shows tiktoken input, and says output and caching are Codex\'s',
+          f'<div class="k">Input</div><div class="v">{render.big(t["tiktoken_input"])}<' in tiles
+          and 'counted with tiktoken' in tiles
+          and f'{render.big(t["output"])}</div>' in tiles
+          and f'{render.big(t["cached"])} of {render.big(t["input"])} recorded by Codex' in tiles
+          and f'<div class="v">{render.big(s[0]["tiktoken_input"])}</div>' in tiles
+          and '"input_source":"tiktoken"' in page, tiles)
+    check('the terminal line names tiktoken input and Codex\'s figures apart',
+          'input (tiktoken)' in out and 'recorded by Codex: 0.000B input' in out
+          and '40.0% cached' in out, out)
+
+    tiles_mo = page_mo[page_mo.index('class="tiles"'):page_mo.index('id="rlchart"')]
+    wo = mo['rate_limits']['windows'][0]
+    check('without the tokenizer every input figure is Codex\'s, and labelled as recorded',
+          to['input_source'] == 'recorded' and to['tiktoken_input'] is None
+          and 'Recorded input' in tiles_mo and 'tiktoken' not in tiles_mo
+          and 'recorded input' in out_mo and 'tiktoken_input' not in wo['tokens']
+          and all(len(p) == 4 for p in wo['cum_points'])
+          and all(x['tiktoken_input'] is None for x in mo['sessions']), str(to))
+
+    # A file extracted without its reconstruction keeps Codex's figure for its responses,
+    # counted, rather than contributing nothing.
+    data = {p: worker.process(p) for p in rollout.discover(corpus)}
+    gone = next(p for p, r in data.items() if r['session_id'] == 'A')
+    data[gone]['responses'] = []
+    charged, counters = ledger.build(data)
+    mf = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    q = mf['quality']
+    check('a response with no reconstructed prompt keeps Codex\'s input, and is counted',
+          mf['totals']['input_source'] == 'tiktoken'
+          and q['tiktoken_input_fallback'] == 3 and q['tiktoken_input_fallback_tokens'] == 15000
+          and mf['totals']['tiktoken_input'] == 15000 + next(
+              x['tiktoken_input'] for x in m['sessions'] if x['session_id'] == 'B'),
+          f"{mf['totals']} {q}")
+
+
 # --------------------------------------------------------------- account and rate limits
 
 def _jwt(claims):
@@ -1724,6 +1845,7 @@ def main():
     test_local_day_bucketing()
     test_day_span_across_clock_changes()
     test_daily_model_split()
+    test_input_counted_with_tiktoken()
     test_environment_degrades()
     test_report_installs_missing_tiktoken()
     test_tiktoken_installs_itself()

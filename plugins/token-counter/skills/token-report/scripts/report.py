@@ -471,11 +471,21 @@ def main(argv=None):
 
         t = model['totals']
         hit = t['cache_hit']
-        print(f"{t['responses']:,} responses | "
-              f"{t['input']/1e9:.3f}B recorded input | "
-              f"{t['uncached']/1e6:.0f}M uncached | "
-              f"{'--' if hit is None else f'{100*hit:.1f}%'} cached | "
-              f"{t['output']/1e6:.0f}M output")
+        hit = '--' if hit is None else f'{100*hit:.1f}%'
+        if t.get('input_source') == 'tiktoken':
+            # Caching and output are Codex's own figures, so they are named with the input
+            # they are measured against rather than beside the tiktoken count.
+            print(f"{t['responses']:,} responses | "
+                  f"{t['tiktoken_input']/1e9:.3f}B input (tiktoken) | "
+                  f"recorded by Codex: {t['input']/1e9:.3f}B input, "
+                  f"{t['uncached']/1e6:.0f}M uncached, {hit} cached, "
+                  f"{t['output']/1e6:.0f}M output")
+        else:
+            print(f"{t['responses']:,} responses | "
+                  f"{t['input']/1e9:.3f}B recorded input | "
+                  f"{t['uncached']/1e6:.0f}M uncached | "
+                  f"{hit} cached | "
+                  f"{t['output']/1e6:.0f}M output")
         rl = model.get('rate_limits') or {}
         cur = rl.get('current')
         if acct.get('available') or cur:

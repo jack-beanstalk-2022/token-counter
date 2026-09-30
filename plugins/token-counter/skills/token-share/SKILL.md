@@ -15,7 +15,9 @@ This is the only part of the plugin that sends anything over the network, and it
 nothing unless run with `--yes`. (token-report's one other network call downloads `tiktoken`
 from PyPI when it is missing. The share never does that, so the page published on `--yes` is
 the page the dry run wrote.) The numbers come from the same canonical usage ledger as
-token-report, so the leaderboard and the local report agree day for day.
+token-report, so the leaderboard agrees day for day with the report's recorded figures. The
+report page counts input with tiktoken, so its input reads lower than the leaderboard's. If
+the user compares the two, that is why.
 
 Run from this skill's directory, with `python3` on macOS and Linux or `python` on Windows.
 
@@ -61,7 +63,7 @@ logged in its rate-limit snapshots, and the tokens counted in it. tokenusage.dev
 windows to estimate how many tokens each plan's weekly limit holds.
 
 Also sent, unless `--no-report`: the report page, rendered by token-report with `--public`.
-It carries the charts' data (daily recorded input by model, the cumulative token curve and
+It carries the charts' data (daily input by model, the cumulative token curve and
 reported percentage of each weekly limit window over time, and content composition by
 category in hourly buckets) and the headline numbers. It leaves out the two machine strings
 the local page shows, the top session's id and its directory name, and never reads

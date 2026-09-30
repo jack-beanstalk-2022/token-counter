@@ -328,6 +328,15 @@ def _never_installs():
     return lambda: setattr(rp, 'tokenizer_status', orig)
 
 
+@case('input shown as Codex recorded it, though the run counted it with tiktoken',
+      lambda: tp.test_input_counted_with_tiktoken())
+def _recorded_input():
+    # Before 1.4.0 every input figure was Codex's, and tiktoken fed only the content pie.
+    orig = analyze.tiktoken_inputs
+    analyze.tiktoken_inputs = lambda fr: {}
+    return lambda: setattr(analyze, 'tiktoken_inputs', orig)
+
+
 def main():
     print(f'{len(CASES)} mutations\n')
     bad = 0

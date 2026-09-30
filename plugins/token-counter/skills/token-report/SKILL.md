@@ -60,7 +60,8 @@ resolved `CODEX_HOME`, the sessions root and what is in it, the auth mode, the v
 the index, marking every failed check with `!`, and exits non-zero if any check failed.
 
 Use `--no-open` when the user only wants numbers, and read the summary the script prints on
-stdout: one line of totals (responses, recorded input, uncached, cache hit, output) and, when
+stdout: one line of totals (responses, input counted with tiktoken, then Codex's recorded
+input, uncached, cache hit and output; without the tokenizer, recorded input only) and, when
 an account and a limit window are available, a second line with the account, plan, weekly
 limit used, when the current window opened, and when it next resets. Use `--json` when you
 need to answer a specific question rather than hand over a page.
@@ -72,12 +73,23 @@ run ~4s.
 
 ## Reporting results
 
-Four things must survive into whatever you tell the user, because the report is easy to
+These things must survive into whatever you tell the user, because the report is easy to
 over-read:
 
-- **Recorded, not billed.** These are the counts Codex wrote to its logs. Legacy compaction
-  intervals carry no usage evidence, so this is recorded coverage, not a billing total.
-- **Cached input is a subset of recorded input**, not an extra charge on top of it.
+- **Input is counted with tiktoken; output and caching are Codex's.** The input tile, the
+  longest session, the daily chart and the cumulative curve count each request's prompt as
+  rebuilt from the log. That reads below what Codex recorded (86% on the development corpus),
+  because tool definitions, message framing and encrypted reasoning are not in the log in a
+  countable form. Output, cached input and the cache hit are Codex's recorded figures:
+  reasoning tokens are encrypted and caching is decided on the server. Say which is which
+  when you quote a number. If the tile says "Recorded input", the run had no tokenizer and
+  every figure is Codex's.
+- **Recorded, not billed.** Codex's figures are the counts it wrote to its logs. Legacy
+  compaction intervals carry no usage evidence, so this is recorded coverage, not a billing
+  total.
+- **Cached input is a subset of Codex's recorded input**, not an extra charge on top of it.
+  It can exceed the tiktoken input, which is why the cache hit is never measured against
+  that.
 - **Cache-divergence rows are leads, not findings.** Rollouts carry no request body, no send
   timestamp, no cache key and no TTL, so cache *causation* is not recoverable. Cache also
   survives across sessions, and the log is written in completion order, not request order.
@@ -94,9 +106,10 @@ Quoting the reported percentage and the reset times is fine; those are recorded 
 
 ## If it fails
 
-- `tokenizer unavailable` — the run continues without it. `tiktoken` and the vendored
-  vocabulary are needed only for content composition, so the headline numbers, the weekly
-  limit chart and the daily chart are still exact and the fourth panel says why it is empty.
+- `tokenizer unavailable` — the run continues without it. Input then shows as Codex
+  recorded it (the tile reads "Recorded input"), every other headline number, the weekly
+  limit chart and the daily chart are unaffected, and the composition panel says why it is
+  empty.
   If the reason is that `tiktoken` could not be installed, re-run with network access (see
   *First run*). A missing or corrupt vocabulary is fixed with `python3 scripts/fetch_vocab.py`
   once from the repository root; that is a packaging step, and the report never downloads
@@ -112,10 +125,11 @@ Quoting the reported percentage and the reset times is fine; those are recorded 
 
 ## What the report contains
 
-Five headline numbers — recorded input, output, cache hit, sessions, and the weekly limit as
-the server's own reported percentage — and three charts: a cumulative token curve per weekly
-limit window with the reported percentage overlaid; daily recorded input stacked by the model
-that was charged for it; and content composition by category.
+Five headline numbers — input (counted with tiktoken), output, cache hit, sessions, and the
+weekly limit as the server's own reported percentage — plus the longest session, and three
+charts: a cumulative token curve per weekly limit window with the reported percentage
+overlaid; daily input stacked by the model that was charged for it; and content composition
+by category.
 
 The two time charts share one axis, so a day in one is the same x in the other. Scrolling,
 dragging or pinching either chart zooms and pans both — horizontally only, the value axes do

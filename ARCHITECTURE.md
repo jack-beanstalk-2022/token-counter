@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  162 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  172 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -876,6 +876,51 @@ moved far enough to read as two, restarting the curve mid-week for no underlying
 
 ---
 
+### 5.7 Input counted with tiktoken
+
+Since 1.4.0 the page shows input as tiktoken counts it, not as Codex recorded it. Everything
+on the page that shows input switches together, so the page never mixes the two: the input
+tile, the longest-session tile and the order of `sessions`, the daily chart and the
+input-by-model pie, and the cumulative curve in each limit window.
+
+- **What is counted.** Each charged response's reconstructed prompt (§5.3): every item
+  written before that response's own trailing output, tokenized with the vendored
+  `o200k_base`, with images at the low bound of §5.4. It is the same `recon_input` the
+  residual has always compared against Codex's figure, so the headline input and
+  `residual.reconstructed` are one number. No extra tokenization is needed. The counts are
+  already made for the content composition, and a prompt's total is a running sum over
+  them.
+- **Why it reads lower.** It came to 86.2% of Codex's recorded input on the development
+  corpus (§5.3). The log does not keep tool definitions (except `dynamic_tools` in 8 files)
+  or message framing, and the encrypted reasoning resent in prompts cannot be counted. The
+  shortfall is the residual, and it says nothing about the encoding (§4.1).
+- **What stays Codex's.**
+  - Output: reasoning tokens are encrypted, 47M of the 90M output on the development
+    corpus, and only their summaries are readable.
+  - Cached input, uncached input and the cache hit: caching is decided on the server and
+    the log has no cache telemetry (§5.2). The hit ratio is Codex's cached over Codex's
+    input, never over the tiktoken count, which cached input can exceed.
+  - The weekly-limit percentages (§5.6).
+  - The response count: the reconstruction is anchored on Codex's usage records.
+
+  The output and cache tiles say so, and the terminal line prints Codex's figures under
+  "recorded by Codex".
+- **The curve.** Each window's cumulative curve draws tiktoken input plus Codex's output.
+  Output is under 1% of it (§7).
+- **Fallbacks.** With `--metrics-only`, or with no tokenizer, nothing is counted, and every
+  input figure is Codex's, labelled "Recorded input" as before. A charged response whose
+  file has no reconstruction keeps Codex's figure rather than contributing zero. That
+  happens with an attribution error part-way through a file, and such responses are counted
+  in `tiktoken_input_fallback` and `tiktoken_input_fallback_tokens`.
+- **JSON and share.** These keep Codex's figures under their old names: `totals.input`,
+  `daily[].input`, `daily[].models`, each window's `tokens.input`, and the first four
+  `cum_points` columns. The tiktoken counts are added beside them: `totals.tiktoken_input`,
+  `totals.input_source`, `daily[].tiktoken_input`, `daily[].tiktoken_models`,
+  `sessions[].tiktoken_input`, `models[].tiktoken_input`, `tokens.tiktoken_input` in each
+  window, and a fifth `cum_points` column. `share.py` sends Codex's figures, so the
+  leaderboard still agrees with the report's recorded figures day for day. The shared
+  page's input reads lower than the leaderboard's, by the residual.
+
 ## 6. Plugin packaging
 
 Codex plugins are directories with `.codex-plugin/plugin.json` plus `skills/<name>/SKILL.md`,
@@ -891,7 +936,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 162 cases
+│   ├── test_pipeline.py                  # §3–§7, 172 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1008,6 +1053,9 @@ opaque origin and can fetch or post nothing; the page needs nothing more, being 
 render offline. `scripts/test_share.py` asserts the page sent is the page the dry run wrote,
 and that no prompt, directory or session id is in it.
 
+Since 1.4.0 that page counts input with tiktoken when the report could (§5.7), so its input
+tile and daily chart read below the leaderboard's recorded input. The payload is unchanged.
+
 It is dry-run by default and sends only with `--yes`. A damaged record with cached > input
 or reasoning > output is clamped and counted rather than failing the share, because the
 server rejects that arithmetic outright. The first share returns a bearer token, stored per
@@ -1027,11 +1075,11 @@ Five headline numbers and three charts. Everything else the model carries — se
 reconciliation, images, the window table, the data-quality counters — is reported through
 `--json` and the stdout summary, not here (rev 12).
 
-1. Tiles — recorded input, output, cache hit, sessions, and the weekly limit as the server's
-   own reported percentage
-2. **Cumulative tokens per weekly limit window** — locally measured input plus output,
+1. Tiles — input (counted with tiktoken, §5.7), output, cache hit, sessions, the longest
+   session, and the weekly limit as the server's own reported percentage
+2. **Cumulative tokens per weekly limit window** — tiktoken input plus Codex's output,
    restarting at zero at every reset, with the reported percentage overlaid (§5.6)
-3. **Daily recorded input**, stacked by the model that was charged for it
+3. **Daily input**, stacked by the model that was charged for it
 4. **What filled the window** — independently tokenized content, by category
 
 Every figure derived from inference rather than measurement carries a visible `inference`
@@ -1325,6 +1373,17 @@ Structural, not deferred work.
 
 ## 10. Revision history
 
+**Rev 17** — input is counted with tiktoken (§5.7). Also plugin 1.4.0.
+
+| Change | Cause |
+| --- | --- |
+| The page's input (tile, longest session, daily chart, input-by-model pie, cumulative curve) is tiktoken's count of each response's reconstructed prompt | Requested. Every number on the page came from Codex's usage records, and tiktoken fed only the content pie |
+| Output, cached, uncached, the cache hit and the weekly limit stay Codex's; the output and cache tiles and the terminal line say so | Requested, and forced by the data. Reasoning tokens are encrypted and caching is decided on the server, so neither can be counted from the log. A cache hit over the tiktoken input would divide one measurement by another, and cached input can exceed it |
+| The tiktoken counts are new JSON fields; the old ones keep Codex's figures | `share.py` and `test_share.py` read `daily[].input` and each window's `tokens`, and the leaderboard has to keep agreeing with the report's recorded figures |
+| A response with no reconstruction keeps Codex's figure, and is counted | Counting it as zero would understate the input silently |
+| `analyze.tiktoken_inputs`, with a mutation case that empties it | So that reverting the switch is testable in-process. `test_input_counted_with_tiktoken` catches it |
+| `test_render` injects its hostile model name into both daily splits | The chart now draws `tiktoken_models` when the run tokenized, so a name only in `models` never reached the legend the test checks |
+
 **Rev 16** — `tiktoken` installs itself (§4.2). Plugin 1.4.0.
 
 | Change | Cause |
@@ -1563,8 +1622,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | Check | Result |
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
-| `scripts/test_mutations.py` | **18/18** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **162/162** across tokenizer, installing `tiktoken` on first use, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
+| `scripts/test_mutations.py` | **19/19** historical defects reverted, each caught by the test named for it |
+| `scripts/test_pipeline.py` | **172/172** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
 | `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |
