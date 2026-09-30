@@ -923,10 +923,20 @@ repository) is per-day counts plus, per month, the top ten sessions by active ti
 top ten by tokens. A session is sent as a 16-hex-character SHA-256 prefix of its id (domain-separated, so
 it matches no other tool's hash of the same id), its first and last
 response time, **active time** — the sum of gaps between consecutive responses, leaving out
-any gap over 30 minutes — and its counts and most-used model. Nothing from content
-extraction, no `cwd`, no titles and no account claims can reach the payload: it is built
-from ledger rows and three fields of the file result (`session_id`, `date`, and the row
-timestamps), and the test asserts the exact key set.
+any gap over 30 minutes — and its counts and most-used model.
+
+Since 1.2.0 the payload also carries every consumed weekly rate-limit window (up to 104,
+newest kept), as `rate_limit_windows` reconstructs it (§5.6): its start, the `plan_type` and
+the first and peak `used_percent` the server reported, and the tokens the ledger attributes
+to it. The two series travel side by side, as on the report's chart; `share.py` still
+asserts no tokens-per-percent rate. tokenusage.dev estimates one per plan from many sharers'
+recent windows and publishes how. The windows are built from the same clamped ledger rows
+as the days, so a window never holds more than the days do, which the server checks.
+
+Nothing from content extraction, no `cwd`, no titles and no account claims can reach the
+payload: it is built from ledger rows, the rate-limit snapshots, and three fields of the file
+result (`session_id`, `date`, and the row timestamps), and the test asserts the exact key set.
+The `plan_type` in it is the rollout's, never `auth.json`'s.
 
 It is dry-run by default and sends only with `--yes`. A damaged record with cached > input
 or reasoning > output is clamped and counted rather than failing the share, because the

@@ -234,7 +234,7 @@ def _downsample(points, limit=MAX_POINTS):
     return keep
 
 
-def rate_limit_windows(files, responses, now=None):
+def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
     """Reported weekly-limit windows, with locally measured token usage inside each.
 
     Two independent series meet here and are deliberately never combined into one number:
@@ -253,7 +253,9 @@ def rate_limit_windows(files, responses, now=None):
     window reading 0%, with a reset seven days out from that instant rather than from the
     previous window's. A seven-day grid would put every boundary in the wrong place.
 
-    `responses` is ``[(epoch, input, cached, output), ...]`` for charged responses.
+    `responses` is ``[(epoch, input, cached, output), ...]`` for charged responses.  `newest`
+    bounds how many of the newest windows are returned (the chart's worth by default);
+    ``None`` returns all of them.
     """
     now = now if now is not None else datetime.datetime.now().timestamp()
     merged = _merge_window_quotes(files)
@@ -390,7 +392,7 @@ def rate_limit_windows(files, responses, now=None):
         'available': True,
         'window_minutes': target,
         'weekly': target == WEEKLY_MINUTES,
-        'windows': out_windows[-MAX_CHART_WINDOWS:],
+        'windows': out_windows if newest is None else out_windows[-newest:],
         'windows_total': len(out_windows),
         'current': current,
         'observations': sum(q['n'] for q in weekly),

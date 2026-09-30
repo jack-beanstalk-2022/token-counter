@@ -8,9 +8,11 @@
     share.py --delete --yes           # remove everything shared, and forget the token
 
 The token-report skill never touches the network. This script is the one exception, and it
-sends only when run with --yes. What it sends is daily token counts and a handful of
-per-session summaries -- counts, times and a model name. Never prompts, file contents,
-paths, session titles, or anything from auth.json. See the SKILL.md next to this file.
+sends only when run with --yes. What it sends is daily token counts, a handful of
+per-session summaries -- counts, times and a model name -- and, per weekly rate-limit window,
+the plan and percentage the server reported beside the tokens counted in it. Never prompts,
+file contents, paths, session titles, or anything from auth.json. See the SKILL.md next to
+this file.
 """
 import argparse
 import collections
@@ -29,7 +31,7 @@ sys.path.insert(0, REPORT)
 import report as reportcli  # noqa: E402  -- enforces the Python floor on import
 from tokencounter import analyze, ledger, rollout, worker  # noqa: E402
 
-CLIENT = {'name': 'token-counter', 'version': '1.1.0'}
+CLIENT = {'name': 'token-counter', 'version': '1.2.0'}
 SCHEMA = 1
 DEFAULT_API = 'https://tokenusage.dev/api'
 
@@ -43,6 +45,15 @@ IDLE_CAP_S = 30 * 60
 # server to pick each month's record holders, without shipping every session ever run.
 SESSIONS_PER_MONTH = 10
 
+# Weekly rate-limit windows sent, newest kept: two years of weeks. The server's per-plan
+# estimate only reads recent ones; older windows are history, not evidence of today's limits.
+WINDOWS_MAX = 104
+
+# The server refuses anything dated before Codex shipped. The oldest window's start can be
+# inferred from its quoted reset, seven days before it, so it could land earlier than the
+# logs do; such a window is dropped here rather than failing the whole share.
+EARLIEST_START = '2025-04-01T00:00:00Z'
+
 
 def _iso(epoch_s):
     return datetime.datetime.fromtimestamp(epoch_s, datetime.timezone.utc).strftime(
@@ -53,6 +64,55 @@ def session_hash(sid):
     """Stable, one-way id for a session: the leaderboard can tell sessions apart, and no one
     can map one back to a rollout file."""
     return hashlib.sha256(('tokenusage.dev:' + str(sid)).encode('utf-8')).hexdigest()[:16]
+
+
+def _pct(v):
+    """A reported percentage, as sent: within 0..100, two decimals, or None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return round(min(100.0, max(0.0, float(v))), 2)
+
+
+def limit_windows(results, responses, now_s):
+    """Each consumed weekly rate-limit window, oldest first: the plan and the percentages the
+    server reported for it, beside the tokens measured here in the same span.
+
+    The two series are sent side by side and never combined, as in the report (ARCHITECTURE
+    §5.6): this script asserts no tokens-per-percent rate. The server estimates one per plan
+    from many sharers' windows, and says how.
+
+    `responses` is ``[(epoch, input, cached, output), ...]``, the same charged, clamped rows
+    the days are counted from, so a window can never hold more than the days do.
+    """
+    rl = analyze.rate_limit_windows(results, responses, now=now_s, newest=None)
+    if not rl.get('available') or not rl.get('weekly'):
+        return []
+    out = []
+    starts = set()
+    for w in rl['windows']:
+        first, peak = _pct(w.get('first_pct')), _pct(w.get('peak_pct'))
+        if w.get('reset_at') is None or first is None or not peak:
+            continue
+        start = _iso(w['reset_at'])
+        # Two windows first seen in the same second would be refused as duplicates.
+        if start < EARLIEST_START or start in starts:
+            continue
+        starts.add(start)
+        plan = w.get('plan_type')
+        plan = plan.strip().lower()[:40] if isinstance(plan, str) else ''
+        t = w['tokens']
+        out.append({
+            'start': start,
+            'window_minutes': rl['window_minutes'],
+            'plan': plan or None,
+            'first_pct': first,
+            'peak_pct': peak,
+            'responses': t['responses'],
+            'input': t['input'],
+            'cached': t['cached'],
+            'output': t['output'],
+        })
+    return out[-WINDOWS_MAX:]
 
 
 def active_seconds(epochs):
@@ -75,6 +135,7 @@ def build_payload(results, charged, handle=None, now=None):
     notes = collections.Counter()
     days = collections.defaultdict(collections.Counter)
     sessions = {}
+    timeline = []
 
     for path, fr in sorted(results.items()):
         rows = charged.get(path) or []
@@ -101,6 +162,7 @@ def build_payload(results, charged, handle=None, now=None):
                 notes['undated_responses'] += 1
                 continue
             e = worker.epoch(ts)
+            timeline.append((e, inp, cch, out))
             dd = days[d]
             dd['responses'] += 1
             dd['input'] += inp
@@ -156,14 +218,16 @@ def build_payload(results, charged, handle=None, now=None):
                 keep[x['id']] = x
     notes['sessions_total'] = len(summaries)
 
+    now_s = (now or datetime.datetime.now(datetime.timezone.utc)).timestamp()
     payload = {
         'schema': SCHEMA,
         'client': dict(CLIENT),
-        'generated_at': _iso((now or datetime.datetime.now(datetime.timezone.utc)).timestamp()),
+        'generated_at': _iso(now_s),
         'days': [dict(date=d, responses=v['responses'], input=v['input'], cached=v['cached'],
                       output=v['output'], reasoning=v['reasoning'], sessions=v['sessions'])
                  for d, v in sorted(days.items()) if v['responses']],
         'sessions': sorted(keep.values(), key=lambda x: (x['start'], x['id'])),
+        'windows': limit_windows(results, timeline, now_s),
     }
     if handle:
         payload['handle'] = handle
@@ -253,6 +317,16 @@ def _dur(s):
     return f'{h}h {m:02d}m' if h else f'{m}m'
 
 
+def _describe_windows(windows):
+    if not windows:
+        return 'limits       no weekly rate-limit windows in the logs'
+    plans = collections.Counter(w['plan'] or 'unknown' for w in windows)
+    latest = windows[-1]
+    return (f"limits       {len(windows):,} weekly windows, "
+            + ', '.join(f'{n} on {p}' for p, n in plans.most_common())
+            + f"; latest {latest['start'][:10]} at {latest['peak_pct']:g}% used")
+
+
 def describe(payload, notes, handle, api):
     """What will be sent, in words: printed before anything leaves the machine."""
     days = payload['days']
@@ -271,6 +345,7 @@ def describe(payload, notes, handle, api):
         f"{_n(tot_out)} output)",
         f"sessions     {len(payload['sessions']):,} summarised of {notes['sessions_total']:,}"
         f" (per month, the top {SESSIONS_PER_MONTH} by active time and by tokens)",
+        _describe_windows(payload.get('windows') or []),
         '',
         'month        tokens      sessions  longest session',
     ]
@@ -284,8 +359,9 @@ def describe(payload, notes, handle, api):
                      f"{_dur(longest[k]) if k in longest else '--'}")
     lines += [
         '',
-        'sent: per-day token counts, and per-session start/end times, active time, token',
-        'counts and model name, under a one-way hash of the session id.',
+        'sent: per-day token counts; per-session start/end times, active time, token counts',
+        'and model name, under a one-way hash of the session id; and per weekly limit window,',
+        'its start, the plan and percentage used that Codex logged, and the tokens counted in it.',
         'never sent: prompts, outputs, file contents or paths, session titles, your',
         'account or email.',
     ]

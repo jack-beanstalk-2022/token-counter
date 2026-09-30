@@ -62,9 +62,12 @@ python scripts/share.py --delete --yes         # remove everything you shared
 What is sent is counted from the same canonical ledger as the report, so the leaderboard and
 your local report agree day for day: per-day responses, recorded input, cached input, output
 and reasoning tokens, plus each month's top sessions by active time and by tokens (a one-way
-hash of the session id, start and end times, active time, counts and model name). Never sent:
-prompts, outputs, tool results, file contents or paths, session titles, or anything from
-`auth.json`. `--out payload.json` writes the exact payload for you to read without sending it.
+hash of the session id, start and end times, active time, counts and model name), plus each
+weekly rate-limit window (its start, the plan and percentages Codex logged for it, and the
+tokens counted in it; tokenusage.dev estimates each plan's weekly limit from these). Never
+sent: prompts, outputs, tool results, file contents or paths, session titles, or anything
+from `auth.json`. `--out payload.json` writes the exact payload for you to read without
+sending it.
 
 The first share returns a token, kept in `~/.codex/token-counter/share.json` (mode 0600); it
 is what lets you update or delete your numbers later. The leaderboard is public and every

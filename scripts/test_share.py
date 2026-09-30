@@ -3,6 +3,7 @@
 Run with ``python scripts/test_share.py``. No network: the server is a stub on localhost.
 """
 import contextlib
+import datetime
 import http.server
 import io
 import json
@@ -138,12 +139,18 @@ def test_nothing_private_is_sent():
     check('no working directory in the payload', SECRET_CWD not in blob and 'someone' not in blob)
     check('no raw session id in the payload', '11111111-aaaa' not in blob)
     check('only the documented keys are sent',
-          set(p) == {'schema', 'client', 'generated_at', 'days', 'sessions', 'handle'}
+          set(p) == {'schema', 'client', 'generated_at', 'days', 'sessions', 'windows', 'handle'}
           and all(set(d) == {'date', 'responses', 'input', 'cached', 'output', 'reasoning',
                              'sessions'} for d in p['days'])
           and all(set(x) == {'id', 'day', 'start', 'end', 'active_s', 'responses', 'input',
                              'cached', 'output', 'reasoning', 'model'} for x in p['sessions']),
           json.dumps(p)[:400])
+    *_, w, _ = _build(_corpus_file(_limit_records()))
+    check('only the documented keys are sent per limit window',
+          w['windows'] and all(set(x) == {'start', 'window_minutes', 'plan', 'first_pct',
+                                          'peak_pct', 'responses', 'input', 'cached', 'output'}
+                               for x in w['windows']),
+          json.dumps(w['windows'])[:400])
 
 
 def test_sessions_are_capped_per_month():
@@ -170,6 +177,110 @@ def test_damaged_counts_are_clamped():
                                      {'inp': 10, 'cached': 20})]))
     check('cached above input is clamped, and counted',
           p['days'][0]['cached'] == 10 and notes['clamped_cached'] == 1, str(p['days']))
+
+
+# ---------------------------------------------------------------------------- limit windows
+
+WEEK = 7 * 86400
+T0 = 1789000000     # 2026-09-10T00:26:40Z
+
+
+def _tc(t, pct, resets_at, cum, inp=1000, cached=400, out=10, window=10080, plan='prolite'):
+    """A `token_count` event: one response's usage beside the server's rate-limit snapshot."""
+    iso = datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat().replace(
+        '+00:00', 'Z')
+    last = {'input_tokens': inp, 'cached_input_tokens': cached, 'output_tokens': out,
+            'reasoning_output_tokens': 0, 'total_tokens': inp + out}
+    total = {'input_tokens': cum, 'cached_input_tokens': 0, 'output_tokens': 0,
+             'reasoning_output_tokens': 0, 'total_tokens': cum}
+    return {'timestamp': iso, 'type': 'event_msg',
+            'payload': {'type': 'token_count',
+                        'info': {'last_token_usage': last, 'total_token_usage': total},
+                        'rate_limits': {'limit_id': 'codex', 'plan_type': plan,
+                                        'rate_limit_reached_type': None,
+                                        'primary': {'used_percent': pct,
+                                                    'window_minutes': window,
+                                                    'resets_at': resets_at},
+                                        'secondary': None}}}
+
+
+def _limit_records(first_pcts=(0.0, 10.0, 25.0, 40.0), window=10080, plan='prolite'):
+    """One consumed window, then an early reset into a second, then an idle slide."""
+    recs = [{'timestamp': '2026-09-10T00:26:40Z', 'type': 'session_meta',
+             'payload': {'session_id': 'W', 'id': 'W', 'cwd': SECRET_CWD}}]
+    cum = 0
+    for i, pct in enumerate(first_pcts):
+        cum += 1000
+        recs.append(_tc(T0 + i * 3600, pct, T0 + WEEK, cum, window=window, plan=plan))
+    t1 = T0 + len(first_pcts) * 3600
+    for i, pct in enumerate((0.0, 5.0)):
+        cum += 1000
+        recs.append(_tc(t1 + i * 3600, pct, t1 + WEEK, cum, window=window, plan=plan))
+    # Idle: 0% throughout, the reset re-quoted as now + 7 days on every call.
+    t2 = t1 + 3 * 3600
+    for i in range(3):
+        recs.append(_tc(t2 + i * 60, 0.0, t2 + i * 60 + WEEK, cum, inp=0, cached=0, out=0,
+                        window=window, plan=plan))
+    return recs
+
+
+def _corpus_file(recs):
+    root = tempfile.mkdtemp()
+    d = os.path.join(root, '2026', '09', '10')
+    os.makedirs(d)
+    with open(os.path.join(d, 'rollout-2026-09-10T00-00-00-W.jsonl'), 'w',
+              encoding='utf-8') as fh:
+        for r in recs:
+            fh.write(json.dumps(r) + '\n')
+    return root
+
+
+def test_limit_windows():
+    _utc()
+    *_, p, _ = _build(_corpus_file(_limit_records()))
+    w = p['windows']
+    check('each consumed weekly window is sent, and an idle slide is not',
+          len(w) == 2, json.dumps(w))
+    a, b = w
+    check('a window starts where it was first seen, and the next where the percentage drops',
+          a['start'] == share._iso(T0) and b['start'] == share._iso(T0 + 4 * 3600),
+          f"{a['start']} {b['start']}")
+    check('the plan and the reported percentages ride along',
+          a['plan'] == 'prolite' and a['first_pct'] == 0 and a['peak_pct'] == 40
+          and b['peak_pct'] == 5 and a['window_minutes'] == 10080, json.dumps(a))
+    check('tokens are split at the reset, not pooled',
+          (a['responses'], a['input'], a['cached'], a['output']) == (4, 4000, 1600, 40)
+          and (b['input'], b['output']) == (2000, 20), json.dumps(w))
+    check('windows never hold more than the days',
+          sum(x['input'] for x in w) <= sum(d['input'] for d in p['days']))
+
+    # Logs that begin partway through a week: the window's first reading says how much of
+    # the limit was already gone before this machine saw anything.
+    *_, p, _ = _build(_corpus_file(_limit_records(first_pcts=(30.0, 45.0))))
+    check('a window first seen partway through keeps its first reading',
+          p['windows'][0]['first_pct'] == 30 and p['windows'][0]['peak_pct'] == 45,
+          json.dumps(p['windows'][0]))
+
+    *_, p, _ = _build(_corpus_file(_limit_records(window=300)))
+    check('only weekly windows are sent', p['windows'] == [], json.dumps(p['windows']))
+
+    # The server refuses a window dated before Codex shipped, and a repeated start; either
+    # would fail the whole share, so neither is sent.
+    results = {p: worker.metrics_only(p) for p in rollout.discover(_corpus_file(_limit_records()))}
+    real = analyze.rate_limit_windows
+    fake = real(results, [], newest=None)
+    early = dict(fake['windows'][0], reset_at=1735689600)          # 2025-01-01
+    twin = dict(fake['windows'][1], reset_at=fake['windows'][0]['reset_at'])
+    analyze.rate_limit_windows = lambda *a, **k: dict(fake, windows=[early, fake['windows'][0], twin])
+    try:
+        sent = share.limit_windows(results, [], T0 + WEEK)
+    finally:
+        analyze.rate_limit_windows = real
+    check('windows the server would refuse are dropped, not the share',
+          [w['start'] for w in sent] == [share._iso(T0)], json.dumps(sent))
+
+    *_, p, _ = _build(_corpus(CORPUS))
+    check('logs without rate limits send an empty list', p['windows'] == [])
 
 
 # ---------------------------------------------------------------------------- transport
@@ -246,6 +357,7 @@ def test_transport():
         rc, out, _ = _run(root, home, '--api', api)
         check('a dry run sends nothing', rc == 0 and not Stub.calls and 'dry run' in out, out)
         check('a dry run says what would be shared', '2026-09' in out and 'never sent' in out, out)
+        check('a dry run says what it sends about rate limits', 'limit window' in out, out)
 
         rc, _, err = _run(root, home, '--api', api, '--yes')
         check('a first share without a handle is refused locally',
@@ -307,6 +419,7 @@ def main():
     test_nothing_private_is_sent()
     test_sessions_are_capped_per_month()
     test_damaged_counts_are_clamped()
+    test_limit_windows()
     test_transport()
     bad = sum(1 for _, ok, _ in RESULTS if not ok)
     print(f'\n{len(RESULTS) - bad}/{len(RESULTS)} passed')
