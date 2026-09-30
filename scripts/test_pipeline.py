@@ -21,7 +21,10 @@ LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    'plugins', 'token-counter', 'skills', 'token-report', 'scripts')
 sys.path.insert(0, LIB)
 
-from tokencounter import analyze, classify, encoding, images, ledger, render, rollout, worker  # noqa: E402
+# No test may reach PyPI. The two that exercise installing lift this for their own runs.
+os.environ['TOKEN_COUNTER_NO_INSTALL'] = '1'
+
+from tokencounter import analyze, classify, deps, encoding, images, ledger, render, rollout, worker  # noqa: E402
 
 RESULTS = []
 
@@ -671,7 +674,10 @@ def test_render():
     hostile = '</script><img src=x onerror=alert(1)> &"<'
     model2 = dict(model)
     model2['models'] = [dict(model['models'][0], model=hostile)]
-    model2['daily'] = [dict(d, models={hostile: d['input']}) for d in model['daily']]
+    # Both splits: the chart draws the tiktoken one when the run counted input (§5.7).
+    model2['daily'] = [dict(d, models={hostile: d['input']},
+                            tiktoken_models={hostile: d['tiktoken_input']})
+                       for d in model['daily']]
     h2 = render.render(model2)
     check('hostile rollout content cannot close the script block',
           '</script><img' not in h2 and h2.count('</script>') == 2,
@@ -813,6 +819,222 @@ def test_environment_degrades():
     check('--doctor names the resolved paths and fails loudly on an empty corpus',
           rc == 1 and 'sessions root' in text and 'rollout files' in text and '!' in text,
           f'rc={rc}\n{text}')
+
+
+# --------------------------------------------------------------------------- installing tiktoken
+
+def test_report_installs_missing_tiktoken():
+    """A run that tokenizes asks for tiktoken to be installed beside its index; a run that
+    cannot use it, or was told not to install, never asks; a failed install costs the panel.
+
+    `deps.ensure` is replaced with a recorder, so nothing is installed and nothing leaves
+    the machine. The install itself is `test_tiktoken_installs_itself`.
+    """
+    root, home, _ = _indexed_corpus([('019bbbbb-0000-7000-8000-000000000001', 3)])
+    calls = []
+    keep_ensure, keep_load = deps.ensure, encoding.load
+    keep_env = os.environ.pop(deps.ENV_OFF, None)
+
+    def run(cli, *extra):
+        calls.clear()
+        out = os.path.join(home, 'm.json')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = cli.main(['--sessions-root', root, '--no-open', '--no-account', '--quiet',
+                           '--no-cache', '--json', out, *extra])
+        with open(out, encoding='utf-8') as fh:
+            return rc, list(calls), json.load(fh), err.getvalue()
+
+    try:
+        deps.ensure = lambda r: calls.append(r)
+        with _codex_home(home) as cli:
+            rc, got, _, _ = run(cli)
+            check('a run that tokenizes installs tiktoken, beside the index',
+                  rc == 0 and got == [cli.out_dir()], f'rc={rc} calls={got}')
+            for extra, why in ((['--no-install'], '--no-install'),
+                               (['--metrics-only'], '--metrics-only, which never tokenizes'),
+                               (['--vocab', os.path.join(home, 'none.tiktoken')],
+                                'no vocabulary, which no install fixes')):
+                rc, got, _, _ = run(cli, *extra)
+                check(f'no install is attempted with {why}', rc == 0 and got == [],
+                      f'rc={rc} calls={got}')
+            os.environ[deps.ENV_OFF] = '1'
+            rc, got, _, _ = run(cli)
+            os.environ.pop(deps.ENV_OFF)
+            check('no install is attempted with TOKEN_COUNTER_NO_INSTALL=1',
+                  rc == 0 and got == [], f'rc={rc} calls={got}')
+
+            reason = 'tiktoken could not be installed: PyPI is unreachable (no network access?)'
+            deps.ensure = lambda r: reason
+
+            def missing(path=None):
+                raise ImportError('tiktoken is required but not importable. Install it with:\n'
+                                  '    python -m pip install tiktoken')
+            encoding.load = missing
+            rc, _, model, err = run(cli)
+            sc = model['scope']
+            check('a failed install costs one panel, and the page says why',
+                  rc == 0 and sc['metrics_only'] and sc['tokenizer_note'] == reason + '.',
+                  f'rc={rc} scope={sc}')
+            check('a failed install says the next run tries again',
+                  'the next run tries again' in err, err)
+
+            rc, _, model, _ = run(cli, '--no-install')
+            note = model['scope']['tokenizer_note'] or ''
+            check('without an install, the note is a sentence that says how to get it',
+                  rc == 0 and note.endswith('installs it.') and 'with:' not in note, note)
+    finally:
+        deps.ensure, encoding.load = keep_ensure, keep_load
+        os.environ[deps.ENV_OFF] = keep_env if keep_env is not None else '1'
+
+
+def test_install_edge_cases():
+    """The corners of `deps` a real install rarely reaches."""
+    import report as cli
+
+    # pip writes in the console code page, uv in UTF-8: neither may raise while decoding.
+    p, why = deps._call([sys.executable, '-c',
+                         'import sys; sys.stdout.buffer.write(b"ok \\xff\\xfe\\x81 done")'],
+                        dict(os.environ))
+    check('installer output that is not valid text is decoded, not raised',
+          why is None and p.stdout.startswith('ok ') and '\ufffd' in p.stdout, repr(why))
+
+    real = deps.sysconfig.get_config_var
+    deps.sysconfig.get_config_var = lambda k: 1 if k == 'Py_GIL_DISABLED' else real(k)
+    try:
+        ft = deps.tag()
+    finally:
+        deps.sysconfig.get_config_var = real
+    check('a free-threaded build gets an install directory of its own',
+          ft.split('-')[1].endswith('t'), ft)
+
+    # A broken install this process cannot move (Windows, an extension it loaded) is
+    # reported before anything is downloaded, so the next run does not download again.
+    target = deps.lib_dir(tempfile.mkdtemp())
+    os.makedirs(os.path.join(target, 'tiktoken'))
+    calls, rename, installer = [], os.rename, deps._run_installer
+
+    def held(a, b):
+        if os.path.normpath(a) == os.path.normpath(target):
+            raise PermissionError('in use')
+        return rename(a, b)
+    os.rename, deps._run_installer = held, lambda stage: calls.append(stage)
+    try:
+        why = deps._install(target)
+    finally:
+        os.rename, deps._run_installer = rename, installer
+    check('an install that cannot be moved aside is reported before any download',
+          calls == [] and 'delete that directory' in (why or '')
+          and os.path.isdir(os.path.join(target, 'tiktoken')), repr(why))
+
+    # The report writes where deps looks: one list, not two copies of it.
+    d = tempfile.mkdtemp()
+    ours = [os.path.join(d, 'home'), os.path.join(d, 'tmp')]
+    keep_roots, keep_out = deps.roots, list(cli._OUT_DIR)
+    deps.roots = lambda: list(ours)
+    cli._OUT_DIR.clear()
+    try:
+        got = cli.out_dir()
+    finally:
+        deps.roots = keep_roots
+        cli._OUT_DIR[:] = keep_out
+    check('the report writes to the directory the install is looked for in',
+          got == ours[0], got)
+
+
+def _fake_tiktoken_wheel(d, version='99.0.0'):
+    """A pure-Python wheel named tiktoken, for pip to install with no network."""
+    import zipfile
+    info = f'tiktoken-{version}.dist-info'
+    files = {
+        'tiktoken/__init__.py': f'__version__ = {version!r}\n',
+        f'{info}/METADATA': f'Metadata-Version: 2.1\nName: tiktoken\nVersion: {version}\n',
+        f'{info}/WHEEL': ('Wheel-Version: 1.0\nGenerator: test_pipeline\n'
+                          'Root-Is-Purelib: true\nTag: py3-none-any\n'),
+    }
+    files[f'{info}/RECORD'] = ''.join(f'{k},,\n' for k in files) + f'{info}/RECORD,,\n'
+    os.makedirs(d, exist_ok=True)
+    with zipfile.ZipFile(os.path.join(d, f'tiktoken-{version}-py3-none-any.whl'), 'w') as z:
+        for k, v in files.items():
+            z.writestr(k, v)
+
+
+def test_tiktoken_installs_itself():
+    """`deps.ensure` really installs, once, into CODEX_HOME, and never into the interpreter.
+
+    Each run is a fresh interpreter started with ``-I -S``, so a tiktoken already installed
+    on this machine is invisible to it, and pip is pointed at a local wheel instead of PyPI.
+    """
+    d = tempfile.mkdtemp()
+    wheels, empty = os.path.join(d, 'wheels'), os.path.join(d, 'empty')
+    _fake_tiktoken_wheel(wheels)
+    os.makedirs(empty)
+    code = (
+        'import json, sys\n'
+        f'sys.path.insert(0, {LIB!r})\n'
+        'from tokencounter import deps\n'
+        'why = deps.ensure(deps.roots()[0])\n'
+        'try:\n'
+        '    import tiktoken\n'
+        '    got = [tiktoken.__version__, tiktoken.__file__]\n'
+        'except ImportError:\n'
+        '    got = None\n'
+        'print(json.dumps({"why": why, "got": got}))\n'
+    )
+
+    def run(home, links, **env):
+        e = dict(os.environ, CODEX_HOME=home, PIP_CONFIG_FILE=os.devnull, PIP_NO_INDEX='1',
+                 PIP_FIND_LINKS=links, PIP_NO_CACHE_DIR='1')
+        e.pop(deps.ENV_OFF, None)
+        e.update(env)
+        p = subprocess.run([sys.executable, '-I', '-S', '-c', code], env=e,
+                           capture_output=True, text=True, timeout=300)
+        try:
+            return json.loads(p.stdout.strip().splitlines()[-1]), p.stderr
+        except (ValueError, IndexError):
+            return {'why': f'rc={p.returncode} {p.stderr[-300:]}', 'got': None}, p.stderr
+
+    home = os.path.join(d, 'home')
+    lib = deps.lib_dir(os.path.join(home, 'token-counter'))
+    r, err = run(home, wheels)
+    check('a missing tiktoken is installed into CODEX_HOME/token-counter/lib/<interpreter>',
+          r['why'] is None and r['got'] and r['got'][0] == '99.0.0'
+          and os.path.dirname(os.path.dirname(r['got'][1])) == lib
+          and 'installing it' in err, f'{r} {err[-300:]}')
+
+    # With nothing for pip to find, a second install could only fail: the run must use the
+    # first one without starting pip at all.
+    r, err = run(home, empty)
+    check('a later run reuses the install without running pip',
+          r['why'] is None and r['got'] and r['got'][0] == '99.0.0'
+          and 'installing' not in err, f'{r} {err[-300:]}')
+
+    # OSError, not ImportError: what an extension built for another interpreter raises.
+    with open(os.path.join(lib, 'tiktoken', '__init__.py'), 'w') as fh:
+        fh.write('raise OSError("an extension built for another interpreter")\n')
+    doc = subprocess.run([sys.executable, '-I', '-S', os.path.join(LIB, 'report.py'), '--doctor',
+                          '--sessions-root', empty],
+                         env=dict(os.environ, CODEX_HOME=home), capture_output=True, text=True,
+                         timeout=120)
+    check('--doctor reports a tiktoken that raises on import, instead of crashing on it',
+          doc.returncode == 1 and '! tiktoken' in doc.stdout and 'Traceback' not in doc.stderr,
+          f'rc={doc.returncode}\n{doc.stdout[-600:]}\n{doc.stderr[-600:]}')
+    r, err = run(home, wheels)
+    check('an install that no longer imports is replaced',
+          r['why'] is None and r['got'] and r['got'][0] == '99.0.0', f'{r} {err[-300:]}')
+
+    fresh = os.path.join(d, 'fresh')
+    r, err = run(fresh, empty)
+    left = os.listdir(os.path.join(fresh, 'token-counter', 'lib'))
+    check('a failed install says why, raises nothing, and leaves nothing half-installed',
+          r['got'] is None and isinstance(r['why'], str) and 'could not be installed' in r['why']
+          and left == [], f'{r} left={left}')
+
+    off = os.path.join(d, 'off')
+    r, err = run(off, wheels, TOKEN_COUNTER_NO_INSTALL='1')
+    check('TOKEN_COUNTER_NO_INSTALL=1 installs nothing and says so',
+          r['got'] is None and deps.ENV_OFF in (r['why'] or '')
+          and not os.path.exists(os.path.join(off, 'token-counter')), f'{r} {err[-300:]}')
 
 
 # --------------------------------------------------------------------------- the index, end to end
@@ -1122,6 +1344,136 @@ def test_daily_model_split():
     check('the daily chart names the models it stacks',
           'm1' in chart and 'm2' in chart and 'other' not in chart,
           chart[-400:])
+
+
+def _counted_corpus():
+    """Two sessions on two days with real prompt text, cached tokens, two models and a weekly
+    limit window: everything the input switch touches (§5.7)."""
+    d = tempfile.mkdtemp()
+    t0 = 1789000000
+    reset = t0 + WEEK
+    iso = lambda t: (datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+                     .isoformat().replace('+00:00', 'Z'))
+
+    def session(sid, model, start, n, words):
+        recs = [_rec('session_meta', {'session_id': sid, 'id': sid}, 0),
+                {'timestamp': iso(start), 'type': 'turn_context',
+                 'payload': {'model': model, 'effort': 'high'}}]
+        cum = 0
+        for i in range(n):
+            recs.append({'timestamp': iso(start + i * 600), 'type': 'response_item',
+                         'payload': {'type': 'message', 'role': 'user', 'content': [
+                             {'type': 'input_text',
+                              'text': f'question {i}: ' + 'lorem ipsum dolor ' * words}]}})
+            cum += 5000
+            tc = _tc(start + i * 600 + 1, 10.0 * (i + 1), reset, cum, 5000)
+            tc['payload']['info']['last_token_usage']['cached_input_tokens'] = 2000
+            recs.append(tc)
+        return recs
+
+    _write(d, 'rollout-2026-09-10T00-00-00-a.jsonl', session('A', 'm1', t0, 3, 40))
+    _write(d, 'rollout-2026-09-11T00-00-00-b.jsonl', session('B', 'm2', t0 + 36 * 3600, 2, 400))
+    return d
+
+
+def test_input_counted_with_tiktoken():
+    """Input on the page is tiktoken's count of each response's reconstructed prompt; output,
+    cached and the cache hit stay Codex's; `--metrics-only` shows Codex's input as before."""
+    import report as cli
+    corpus = _counted_corpus()
+
+    def run(*extra):
+        out = tempfile.mkdtemp()
+        j, h = os.path.join(out, 'm.json'), os.path.join(out, 'r.html')
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            rc = cli.main(['--sessions-root', corpus, '--no-open', '--no-account', '--quiet',
+                           '--no-cache', '--procs', '1', '--json', j, '--out', h, *extra])
+        with open(j, encoding='utf-8') as fh:
+            model = json.load(fh)
+        with open(h, encoding='utf-8') as fh:
+            return rc, model, fh.read(), buf.getvalue()
+
+    rc, m, page, out = run()
+    _, mo, page_mo, out_mo = run('--metrics-only')
+    t, to = m['totals'], mo['totals']
+    check('input is counted with tiktoken: the sum of the reconstructed prompts',
+          rc == 0 and t['input_source'] == 'tiktoken' and t['tiktoken_input'] > 0
+          and t['tiktoken_input'] == m['residual']['reconstructed']
+          and t['tiktoken_input'] != t['input'], str(t))
+    check('output, cached and the cache hit are still what Codex recorded',
+          (t['input'], t['cached'], t['output'], t['reasoning'], t['cache_hit'])
+          == (to['input'], to['cached'], to['output'], to['reasoning'], to['cache_hit'])
+          == (25000, 10000, 50, 0, 0.4), f'{t}\n{to}')
+    check('every response had a prompt to count, so none fell back to Codex\'s figure',
+          m['quality'].get('tiktoken_input_fallback') == 0, str(m['quality']))
+
+    days = m['daily']
+    check('each day splits its tiktoken input by model, and keeps Codex\'s split beside it',
+          len(days) == 2
+          and all(sum(d['tiktoken_models'].values()) == d['tiktoken_input'] for d in days)
+          and all(sum(d['models'].values()) == d['input'] for d in days)
+          and sum(d['tiktoken_input'] for d in days) == t['tiktoken_input']
+          and [(d['input'], d['cached']) for d in days]
+          == [(d['input'], d['cached']) for d in mo['daily']],
+          str(days))
+    w = m['rate_limits']['windows']
+    check('the limit curve runs on tiktoken input; the window keeps Codex\'s figures too',
+          len(w) == 1 and w[0]['tokens']['tiktoken_input'] == t['tiktoken_input']
+          and w[0]['cum_points'][-1][4] == t['tiktoken_input']
+          and w[0]['tokens']['input'] == t['input'], json.dumps(w)[:400])
+    s = m['sessions']
+    check('sessions rank by tiktoken input, which puts the other session on top here',
+          [x['session_id'] for x in s] == ['B', 'A'] and s[0]['input'] < s[1]['input'],
+          str([(x['session_id'], x['input'], x['tiktoken_input']) for x in s]))
+
+    tiles = page[page.index('class="tiles"'):page.index('id="rlchart"')]
+    check('the page shows tiktoken input, and says output and caching are Codex\'s',
+          f'<div class="k">Input</div><div class="v">{render.big(t["tiktoken_input"])}<' in tiles
+          and 'counted with tiktoken' in tiles
+          and f'{render.big(t["output"])}</div>' in tiles
+          and f'{render.big(t["cached"])} of {render.big(t["input"])} recorded by Codex' in tiles
+          and f'<div class="v">{render.big(s[0]["tiktoken_input"])}</div>' in tiles
+          and '"input_source":"tiktoken"' in page, tiles)
+    check('the terminal line names tiktoken input and Codex\'s figures apart',
+          'input (tiktoken)' in out and 'recorded by Codex: 0.000B input' in out
+          and '40.0% cached' in out, out)
+
+    tiles_mo = page_mo[page_mo.index('class="tiles"'):page_mo.index('id="rlchart"')]
+    wo = mo['rate_limits']['windows'][0]
+    check('without the tokenizer every input figure is Codex\'s, and labelled as recorded',
+          to['input_source'] == 'recorded' and to['tiktoken_input'] is None
+          and 'Recorded input' in tiles_mo and 'tiktoken' not in tiles_mo
+          and 'recorded input' in out_mo and 'tiktoken_input' not in wo['tokens']
+          and all(len(p) == 4 for p in wo['cum_points'])
+          and all(x['tiktoken_input'] is None for x in mo['sessions']), str(to))
+
+    # A file extracted without its reconstruction keeps Codex's figure for its responses,
+    # counted, rather than contributing nothing.
+    data = {p: worker.process(p) for p in rollout.discover(corpus)}
+    gone = next(p for p, r in data.items() if r['session_id'] == 'A')
+    data[gone]['responses'] = []
+    charged, counters = ledger.build(data)
+    mf = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    q = mf['quality']
+    check('a response with no reconstructed prompt keeps Codex\'s input, and is counted',
+          mf['totals']['input_source'] == 'tiktoken'
+          and q['tiktoken_input_fallback'] == 3 and q['tiktoken_input_fallback_tokens'] == 15000
+          and mf['totals']['tiktoken_input'] == 15000 + next(
+              x['tiktoken_input'] for x in m['sessions'] if x['session_id'] == 'B'),
+          f"{mf['totals']} {q}")
+
+    # A prompt that reconstructs to zero tokens is a reconstruction that found nothing, and
+    # falls back the same way rather than adding nothing.
+    data = {p: worker.process(p) for p in rollout.discover(corpus)}
+    for resp in data[gone]['responses']:
+        resp['recon_input'] = 0
+    charged, counters = ledger.build(data)
+    mz = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    check('a prompt that reconstructs to nothing keeps Codex\'s input, and is counted',
+          mz['quality']['tiktoken_input_fallback'] == 3
+          and mz['totals']['tiktoken_input'] == mf['totals']['tiktoken_input'],
+          f"{mz['totals']} {mz['quality']}")
 
 
 # --------------------------------------------------------------- account and rate limits
@@ -1567,7 +1919,11 @@ def main():
     test_local_day_bucketing()
     test_day_span_across_clock_changes()
     test_daily_model_split()
+    test_input_counted_with_tiktoken()
     test_environment_degrades()
+    test_report_installs_missing_tiktoken()
+    test_tiktoken_installs_itself()
+    test_install_edge_cases()
     test_account_claims()
     test_rate_limit_windows()
     test_cumulative_curve_is_monotonic()

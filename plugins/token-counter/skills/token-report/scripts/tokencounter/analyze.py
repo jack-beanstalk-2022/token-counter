@@ -120,6 +120,20 @@ def _charged_keys(fr, rows):
     return {(r['stream'], r['index']) for r in rows if r.get('index') is not None}
 
 
+def tiktoken_inputs(fr):
+    """``(stream, index) -> tokens`` in each response's reconstructed prompt, counted with
+    tiktoken (§5.7).  Empty for a file extracted without the tokenizer, whose responses then
+    keep the input Codex recorded.
+
+    A prompt that reconstructs to nothing is left out too.  Every request carries at least
+    its instructions, so zero means the reconstruction found no prompt (an empty range, or
+    only opaque items), not that the request was free: counting it would drop the response's
+    input silently, where leaving it out keeps Codex's figure and counts the fallback.
+    """
+    return {(r.get('stream'), r.get('index')): r['recon_input']
+            for r in (fr.get('responses') or []) if r.get('recon_input')}
+
+
 def _iso(epoch_s):
     """Local-time ISO string for a unix timestamp.  Windows are read by a human, in their
     own zone; the raw epoch is kept beside it for anything that needs to compute."""
@@ -241,7 +255,9 @@ def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
 
     * ``peak_pct`` and the percentage curve are **reported by the server**.  Nothing in this
       tool derives them, and no token count is translated into them.
-    * ``tokens`` and the cumulative curve are **measured here**, from the canonical ledger.
+    * ``tokens`` and the cumulative curve are **measured here**, from the canonical ledger:
+      Codex's recorded input, cached and output, plus the tiktoken count of the input when
+      the responses carry one.
 
     Placing them on one time axis lets the reader see how a week was spent without this tool
     asserting a tokens-per-percent exchange rate it cannot know -- the limit's own unit is
@@ -253,9 +269,12 @@ def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
     window reading 0%, with a reset seven days out from that instant rather than from the
     previous window's. A seven-day grid would put every boundary in the wrong place.
 
-    `responses` is ``[(epoch, input, cached, output), ...]`` for charged responses.  `newest`
-    bounds how many of the newest windows are returned (the chart's worth by default);
-    ``None`` returns all of them.
+    `responses` is ``[(epoch, input, cached, output), ...]`` for charged responses, with a
+    fifth element, the tiktoken count of the response's input, when the report counts input
+    with tiktoken.  Then each window's ``tokens`` gains ``tiktoken_input`` and each
+    ``cum_points`` row a fifth column holding its running total.  `newest` bounds how many
+    of the newest windows are returned (the chart's worth by default); ``None`` returns all
+    of them.
     """
     now = now if now is not None else datetime.datetime.now().timestamp()
     merged = _merge_window_quotes(files)
@@ -326,9 +345,11 @@ def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
     keys = [b for b, _ in bounds]
     acc = [collections.Counter() for _ in live]
     series = [[] for _ in live]
-    for t, inp, cch, out in _in_time_order(responses):
+    counted = any(len(r) > 4 for r in responses)
+    for r in _in_time_order(responses):
         if not keys:
             break
+        t, inp, cch, out = r[:4]
         j = bisect.bisect_right(keys, t) - 1
         if j < 0:
             continue          # charged before the oldest window in range: not attributable
@@ -338,11 +359,15 @@ def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
         a['cached'] += cch
         a['output'] += out
         a['responses'] += 1
-        series[i].append((t, a['input'], a['input'] - a['cached'], a['output']))
+        point = (t, a['input'], a['input'] - a['cached'], a['output'])
+        if counted:
+            a['tiktoken_input'] += r[4] if len(r) > 4 else inp
+            point += (a['tiktoken_input'],)
+        series[i].append(point)
 
     out_windows = []
     for i, c in enumerate(live):
-        pts = [[int(t), a, b, d] for t, a, b, d in _bucket_last(series[i])]
+        pts = [[int(p[0])] + list(p[1:]) for p in _bucket_last(series[i])]
         pct = _downsample(sorted([int(t), p] for t, p in c['points'].items()))
         a = acc[i]
         out_windows.append({
@@ -361,9 +386,10 @@ def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
             'plan_type': c['plan_type'], 'limit_id': c['limit_id'],
             'reached': c['reached'], 'reached_type': c['reached_type'],
             'expired': bool(c['resets_at_max'] and c['resets_at_max'] < now),
-            'tokens': {'input': a['input'], 'cached': a['cached'],
-                       'uncached': a['input'] - a['cached'], 'output': a['output'],
-                       'responses': a['responses']},
+            'tokens': dict({'input': a['input'], 'cached': a['cached'],
+                            'uncached': a['input'] - a['cached'], 'output': a['output'],
+                            'responses': a['responses']},
+                           **({'tiktoken_input': a['tiktoken_input']} if counted else {})),
             'pct_points': pct,
             'cum_points': _downsample(pts),
         })
@@ -479,6 +505,12 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
         quality.setdefault(_k, 0)
     # Charged responses on the absolute timeline, for the per-window cumulative curve.
     resp_ts = []
+    # Input is shown as tiktoken counted it wherever a response has a reconstructed prompt
+    # (§5.7); output, cached and the limit stay Codex's.  Both are accumulated, because
+    # whether any response was counted is only known at the end, and share.py and the JSON
+    # keep reading the recorded figures under their old keys.
+    daily_models_tk = collections.defaultdict(collections.Counter)
+    tk_found = tk_missing = tk_missing_input = 0
 
     for path, fr in sorted(files.items()):
         if fr.get('error'):
@@ -494,7 +526,7 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
                 'session_id': sid, 'threads': 0, 'files': [], 'cwd': fr.get('cwd'),
                 'first': None, 'last': None, 'models': collections.Counter(),
                 'input': 0, 'cached': 0, 'output': 0, 'reasoning': 0, 'responses': 0,
-                'unique_tokens': 0, 'cats': collections.Counter(),
+                'tiktoken_input': 0, 'unique_tokens': 0, 'cats': collections.Counter(),
                 'cli': fr.get('cli_version'), 'resend_cost': 0,
                 'recon': 0, 'reported': 0, 'hot': [],
             }
@@ -545,43 +577,59 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
 
         # -- charged usage ----------------------------------------------------
         first_row = True
+        counted = tiktoken_inputs(fr)
         for r in rows:
             u = r['usage']
             inp = u.get('input_tokens') or 0
             cch = u.get('cached_input_tokens') or 0
             out = u.get('output_tokens') or 0
             rsn = u.get('reasoning_output_tokens') or 0
+            tk = counted.get((r.get('stream'), r.get('index')))
+            if tk is None:
+                # No reconstructed prompt for this one (its file was extracted without the
+                # tokenizer, or failed part-way): it keeps Codex's figure, and says so.
+                tk_missing += 1
+                tk_missing_input += inp
+                tk = inp
+            else:
+                tk_found += 1
             d = _day(r.get('ts'), fr.get('date')) or 'unknown'
-            resp_ts.append((worker.epoch(r.get('ts')), inp, cch, out))
+            resp_ts.append((worker.epoch(r.get('ts')), inp, cch, out, tk))
             totals['responses'] += 1
             totals['input'] += inp
             totals['cached'] += cch
             totals['output'] += out
             totals['reasoning'] += rsn
+            totals['tiktoken_input'] += tk
             dd = daily[d]
             dd['responses'] += 1
             dd['input'] += inp
             dd['cached'] += cch
             dd['output'] += out
+            dd['tiktoken_input'] += tk
             m = r.get('model') or 'unknown'
             daily_models[d][m] += inp
+            daily_models_tk[d][m] += tk
             bm = by_model[m]
             bm['responses'] += 1
             bm['input'] += inp
             bm['cached'] += cch
             bm['output'] += out
             bm['reasoning'] += rsn
+            bm['tiktoken_input'] += tk
             e = r.get('effort') or 'unknown'
             be = by_effort[e]
             be['responses'] += 1
             be['input'] += inp
             be['cached'] += cch
             be['output'] += out
+            be['tiktoken_input'] += tk
             s['responses'] += 1
             s['input'] += inp
             s['cached'] += cch
             s['output'] += out
             s['reasoning'] += rsn
+            s['tiktoken_input'] += tk
             s['models'][m] += 1
             if first_row and cch > 0:
                 quality['first_response_cached'] += 1
@@ -612,7 +660,20 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
                     'new_items': resp.get('new_items'),
                 })
 
+    # tiktoken counts are shown only when the run tokenized and at least one charged response
+    # has a reconstructed prompt.  Otherwise every "tiktoken" figure above is just Codex's
+    # copied over, and publishing it under that name would be false.
+    measured = bool(tk_found) and not (scope or {}).get('metrics_only')
+    shown = 'tiktoken_input' if measured else 'input'
+    if measured:
+        quality['tiktoken_input_fallback'] = tk_missing
+        quality['tiktoken_input_fallback_tokens'] = tk_missing_input
+    else:
+        resp_ts = [r[:4] for r in resp_ts]
+
     for s in sessions.values():
+        if not measured:
+            s['tiktoken_input'] = None
         s['models'] = dict(s['models'])
         s['cats'] = dict(s['cats'])
         s['uncached'] = s['input'] - s['cached']
@@ -622,7 +683,8 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
     leads.sort(key=lambda x: -x['gap'])
     hot.sort(key=lambda h: -h['cost'])
 
-    sess_list = sorted(sessions.values(), key=lambda x: -x['input'])
+    # Sorted by the input the page shows: its top-session tile is the first of these.
+    sess_list = sorted(sessions.values(), key=lambda x: -x[shown])
     deep = [s['session_id'] for s in sess_list[:DEEP_DIVE_SESSIONS]]
     if focus and focus not in deep:
         deep.append(focus)
@@ -640,6 +702,12 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
             'threads': sum(s['threads'] for s in sessions.values()),
             'responses': totals['responses'],
             'input': inp,
+            # The input the page shows, and which of the two it is.  `input` above stays
+            # Codex's recorded figure, as `cached`, `uncached` and `cache_hit` are measured
+            # against it: a cached count over a tiktoken count would be a ratio of two
+            # different measurements.
+            'tiktoken_input': totals['tiktoken_input'] if measured else None,
+            'input_source': 'tiktoken' if measured else 'recorded',
             'cached': cch,
             'uncached': inp - cch,
             'output': totals['output'],
@@ -659,6 +727,8 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
         # span from the date string would have to repeat the DST handling done here.
         'daily': [dict(v, date=d, uncached=v['input'] - v['cached'],
                        models=dict(daily_models[d]),
+                       **({'tiktoken_models': dict(daily_models_tk[d])} if measured
+                          else {'tiktoken_input': None}),
                        start=_day_span(d)[0], end=_day_span(d)[1])
                   for d, v in sorted(daily.items())],
         # Categories on the timeline: the report filters these to whatever range is
@@ -672,10 +742,12 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
         # not be in the top N, and it would otherwise appear in the picker with no data.
         'turns': {sid: _turn_profile(files, sessions[sid])
                   for sid in deep if sid in sessions},
-        'models': [dict(v, model=m, uncached=v['input'] - v['cached'])
-                   for m, v in sorted(by_model.items(), key=lambda kv: -kv[1]['input'])],
-        'efforts': [dict(v, effort=e, uncached=v['input'] - v['cached'])
-                    for e, v in sorted(by_effort.items(), key=lambda kv: -kv[1]['input'])],
+        'models': [dict(v, model=m, uncached=v['input'] - v['cached'],
+                        tiktoken_input=v['tiktoken_input'] if measured else None)
+                   for m, v in sorted(by_model.items(), key=lambda kv: -kv[1][shown])],
+        'efforts': [dict(v, effort=e, uncached=v['input'] - v['cached'],
+                         tiktoken_input=v['tiktoken_input'] if measured else None)
+                    for e, v in sorted(by_effort.items(), key=lambda kv: -kv[1][shown])],
         'categories': [{'category': c, 'tokens': cat_tokens.get(c, 0),
                         'chars': cat_chars.get(c, 0), 'items': cat_items.get(c, 0),
                         'opaque': c in classify.OPAQUE}

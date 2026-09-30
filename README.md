@@ -6,8 +6,9 @@ uncached input, names the account it covers, and renders a local HTML dashboard 
 Every figure comes from `~/.codex/sessions/**/rollout-*.jsonl`. One other file is read, and
 only to put a name on the report: `~/.codex/auth.json`, for the non-secret identity claims in
 its id_token — access and refresh tokens are never parsed, and `--no-account` skips the file
-entirely. The report makes no network call at any point: no daemon, no interception, and no
-conversion of tokens into money or rate-limit consumption.
+entirely. No daemon, no interception, and no conversion of tokens into money or rate-limit
+consumption. The report makes one network call, once: if `tiktoken` is missing, the first run
+installs it from PyPI (see [Install](#install)). Nothing of yours is sent.
 
 The one exception is opt-in and separate: the `token-share` skill posts daily token counts to
 the public leaderboard at [tokenusage.dev](https://tokenusage.dev), with your report page at a
@@ -20,16 +21,25 @@ codex plugin marketplace add jack-beanstalk-2022/token-counter
 codex plugin add token-counter@jack-beanstalk-2022
 ```
 
-The `o200k_base` vocabulary ships in this repository, so there is nothing to download and no
-network call at any point. (`scripts/fetch_vocab.py` re-vendors it, and `--verify` checks it
-against stock `o200k_base`; neither is needed to install.)
+The `o200k_base` vocabulary ships in this repository, so there is nothing to download for it.
+(`scripts/fetch_vocab.py` re-vendors it, and `--verify` checks it against stock `o200k_base`;
+neither is needed to install.)
 
-`tiktoken` is the only third-party package, and it is optional:
+`tiktoken` is the only third-party package, and you do not need to install it yourself.
+`codex plugin add` only copies files, so the first report that needs `tiktoken` installs it,
+once, with `pip install --target` into a directory of the plugin's own:
 
 ```
-python -m pip install tiktoken      # enables the content breakdown; every usage figure
-                                    #   is exact without it
+~/.codex/token-counter/lib/<interpreter>-<platform>/     # delete it to undo
 ```
+
+Your Python environment is not touched: nothing goes into site-packages or `--user`. A
+`tiktoken` you already have is used as is. The install needs network access. Inside the Codex
+sandbox the network is usually off, so approve network access for that first run. If the
+install fails, the report still runs with an empty content breakdown (every usage figure is
+exact without it), and the next run tries again. `--no-install` or
+`TOKEN_COUNTER_NO_INSTALL=1` turns the install off, and `python -m pip install tiktoken` works
+as it always has.
 
 Then ask Codex for a token report, or run it directly:
 
@@ -89,8 +99,11 @@ rendered with token-report's `--public`, which leaves out the top session's id a
 name; the dry run writes it to `~/.codex/token-counter/report-shared.html` so you can open
 exactly what will be published. `--no-report` shares the numbers without it.
 
-What is sent is counted from the same canonical ledger as the report, so the leaderboard and
-your local report agree day for day: per-day responses, recorded input, cached input, output
+What is sent is Codex's own recorded counts, from the same ledger the report reads, so the
+leaderboard agrees day for day with the report's recorded figures (in `--json` and on its
+terminal line). The report page counts input with tiktoken instead (see
+[Where the numbers come from](#where-the-numbers-come-from)), so its input reads lower than
+the leaderboard's. Sent: per-day responses, recorded input, cached input, output
 and reasoning tokens, plus each month's top sessions by active time and by tokens (a one-way
 hash of the session id, start and end times, active time, counts and model name), plus each
 weekly rate-limit window (its start, the plan and percentages Codex logged for it, and the
@@ -127,6 +140,31 @@ of leads, visibly marked as inference, not as findings. The same restraint appli
 limit: the two curves share an axis, but no tokens-per-percent rate is published, because the
 corpus shows 95% of a window costing 2.81B recorded input one week and 790M another.
 
+## Where the numbers come from
+
+| On the page | Source |
+| --- | --- |
+| Input tile, longest session, daily chart, input-by-model pie, cumulative token curve | **tiktoken**: each request's prompt, rebuilt from the log and counted with `o200k_base` |
+| Content composition | **tiktoken** |
+| Output, cache hit, cached and uncached input | Codex's own usage records |
+| Weekly limit used, reset times, the limit's % line | Codex's rate-limit snapshots, as the server reported them |
+
+Input is counted because its content is in the log. Output and caching are not: reasoning
+tokens are encrypted (only summaries are readable), and what is cached is decided on the
+server, which the log does not record. The cache hit is Codex's cached input over Codex's
+recorded input, never over the tiktoken count.
+
+The tiktoken input reads below what Codex recorded, 86% on the corpus this was built
+against, because tool definitions, message framing and resent encrypted reasoning are not
+in the log in a form that can be counted. `o200k_base` is itself an assumption: the
+tokenizer current Codex models use is not published. The report writes both figures to
+`--json` (`input` is Codex's, `tiktoken_input` is counted) and prints both on its terminal
+line. Without tiktoken (`--metrics-only`, or before it is installed) every input figure is
+Codex's and is labelled "Recorded input".
+
+Tokenizing is already part of every full run, so this costs no extra time: a cold run over
+7.7 GB takes ~31s against ~8s without tokenizing, and a warm run ~4s either way.
+
 ## Options
 
 ```
@@ -140,6 +178,7 @@ report.py --no-open                # write the file, do not launch a browser
 report.py --include-archived       # count sessions whose rollout file is gone
 report.py --rebuild                # discard the index and re-parse
 report.py --no-account             # do not read auth.json; name no account
+report.py --no-install             # never install tiktoken; count no content without it
 report.py --doctor                 # what this machine provides, then exit
 ```
 
@@ -153,12 +192,12 @@ still charges over the whole corpus, because a fork child's ancestors may sit ou
 | --- | --- | --- |
 | Python **3.8+** | yes | refuses to start, with the version it found |
 | `~/.codex/sessions/**/rollout-*.jsonl` | yes | nothing to report; the error names the directory searched and `CODEX_HOME` |
-| `tiktoken` + the vendored `o200k_base` vocabulary | **no** | content composition is empty and says why; every usage figure is unaffected, and `--metrics-only` is the same path chosen deliberately |
+| `tiktoken` + the vendored `o200k_base` vocabulary | **no**; `tiktoken` installs itself on first use | content composition is empty and says why; every usage figure is unaffected, and `--metrics-only` is the same path chosen deliberately |
 | `~/.codex/auth.json` | no | the report names no account (`--no-account` does this on purpose) |
 | SQLite index at `~/.codex/token-counter/index.db` | no | every run re-parses; a corrupt, locked or unwritable index is reported and skipped |
 | Multiple processes | no | falls back to one, slower and identical |
 | A writable `CODEX_HOME` | no | output goes to the system temp directory, and the path is printed |
-| Network | **never** | — |
+| Network | once, to install `tiktoken` from PyPI if it is missing | the install fails, the run continues without content composition, and the next run tries again |
 
 `CODEX_HOME` is honoured everywhere Codex honours it. `--sessions-root` overrides the corpus
 alone, and moves the `auth.json` lookup with it so a copied corpus is never stamped with the

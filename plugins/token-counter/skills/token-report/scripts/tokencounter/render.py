@@ -395,10 +395,17 @@ function axis(h, top, bot, tk, grid = true){
 // ---- chart 1: cumulative tokens per weekly limit window ------------------------------
 const RL = D.rate_limits || {};
 const WINS = RL.windows || [];
-// cum_points are [t, cumulative input, cumulative uncached, cumulative output].  Input and
-// output are summed rather than drawn apart: output is under 1% of input, so a second curve
-// would sit flat on the axis and say nothing.
-const pick = p => p[1]+p[3];
+// cum_points are [t, cumulative input, cumulative uncached, cumulative output], and a fifth
+// column, cumulative input counted with tiktoken, when the report counted it: the curve then
+// draws that input, beside Codex's output.  Input and output are summed rather than drawn
+// apart: output is under 1% of input, so a second curve would sit flat on the axis and say
+// nothing.
+const TK = D.input_source === 'tiktoken';
+const INPUT = TK ? 'input' : 'recorded input';
+const pick = p => (p.length > 4 ? p[4] : p[1]) + p[3];
+/** A window's input, as the curve draws it. */
+const winInput = w => (TK && w.tokens.tiktoken_input != null)
+  ? `input ${big(w.tokens.tiktoken_input)} (tiktoken)` : `recorded input ${big(w.tokens.input)}`;
 // Fixed over the corpus, never over the viewport: zoom moves the time axis and leaves the
 // value axis alone, so a curve keeps its height while the window slides under it.
 let VMAX = 0;
@@ -463,8 +470,9 @@ function drawRL(tk){
       s += `<path d="${d.join(' ')}" fill="none" stroke="var(--uncached)" stroke-width="1.8" class="mk">`+
            `<title>window opened ${esc(when(start))}\nreset quoted ${esc(w.resets_at_iso||'--')}\n`+
            `peak reported ${w.peak_pct==null?'--':w.peak_pct+'%'}\n`+
-           `recorded input ${big(w.tokens.input)} over ${w.tokens.responses} responses\n`+
+           `${winInput(w)} over ${w.tokens.responses} responses\n`+
            `uncached ${big(w.tokens.uncached)} | output ${big(w.tokens.output)}`+
+           (TK ? ' (recorded by Codex)' : '')+
            (w.late_points ? `\n${w.late_points} later reading(s) not drawn: the next window `+
                             `had already opened` : '')+`</title></path>`;
     }
@@ -481,7 +489,7 @@ function drawRL(tk){
   marks(host, ()=>host.querySelector('svg'), [W, H], [L, 0, PLOT, H], mk, [L, T, PLOT, H-B-T]);
 }
 
-// ---- chart 2: daily recorded input ---------------------------------------------------
+// ---- chart 2: daily input -------------------------------------------------------------
 // The bars are rendered server-side in unit-x -- one unit is one local day -- so only the
 // group transform changes here.  Nothing vertical is ever touched.
 function drawDaily(tk){
@@ -549,8 +557,8 @@ function drawPie(){
 }
 
 // ---- chart 3b: which models took the input --------------------------------------------
-// Recorded input by the charged model, from the same day buckets the daily bars draw, and in
-// the same colours: a model past the daily chart's cap folds into `other` here as well.
+// Input by the charged model, from the same day buckets the daily bars draw, and in the same
+// colours: a model past the daily chart's cap folds into `other` here as well.
 const MODELS = D.models || {};
 function drawModelPie(){
   const host = byId('modelpie');
@@ -568,14 +576,14 @@ function drawModelPie(){
     }
   }
   if(!sum){
-    host.innerHTML = emptyPie('No recorded input in the visible range.');
+    host.innerHTML = emptyPie(`No ${INPUT} in the visible range.`);
     host.__shown = null;
     marks(host, null);
     return;
   }
   const rows = keys.concat(['other']).map(k=>({k:k, v:tot[k]||0,
     fill: k in rank ? `var(--c${rank[k]%14})` : 'var(--dim)'}));
-  pieTo(host, rows, sum, 'recorded input in view', 'recorded input by model');
+  pieTo(host, rows, sum, `${INPUT} in view`, `${INPUT} by model`);
 }
 
 // ---- the pies follow the viewport, a beat behind ---------------------------------------
@@ -2407,7 +2415,7 @@ void main(){
     windows: '',                                       // the time charts need no heading
     daily: '',
     content: 'What filled the window',
-    models: 'Recorded input by model',
+    models: TK ? 'Input by model' : 'Recorded input by model',
   };
   const NAMES = {ledger: 'The numbers', windows: 'Weekly limit windows', daily: 'Daily input',
                  content: 'What filled the window', models: 'Input by model'};
@@ -2886,14 +2894,14 @@ void main(){
       if(!w) return null;
       const t0 = w.reset_at != null ? w.reset_at : ((w.cum_points || [])[0] || [null])[0];
       return [at(`window opened ${t0 == null ? '--' : when(t0)}  ·  peak reported ${w.peak_pct == null ? '--' : w.peak_pct + '%'}`, 0, '--fg'),
-              at(`recorded input ${big(w.tokens.input)} over ${w.tokens.responses.toLocaleString()} responses  ·  uncached ${big(w.tokens.uncached)}`, 1, '--dim')];
+              at(`${winInput(w)} over ${w.tokens.responses.toLocaleString()} responses  ·  uncached ${big(w.tokens.uncached)}`, 1, '--dim')];
     }
     const row = (D.models.days || []).find(r => r[0] === hit.day);
     if(!row) return null;
     const tot = Object.values(row[2]).reduce((a, b) => a + b, 0);
     const top = Object.entries(row[2]).sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([m, v]) => `${m} ${big(v)}`).join('  ·  ');
-    return [at(`${day(hit.day)}  ·  ${big(tot)} recorded input`, 0, '--fg'), at(top, 1, '--dim')];
+    return [at(`${day(hit.day)}  ·  ${big(tot)} ${INPUT}`, 0, '--fg'), at(top, 1, '--dim')];
   }
   function hover(e){
     const h = pick(e);
@@ -3179,8 +3187,9 @@ def _domain(model):
     return [int(lo), int(max(hi, lo + 3600))]
 
 
-def _daily_svg(daily, order, domain):
-    """Daily recorded input, stacked by the model that was charged for it.
+def _daily_svg(daily, order, domain, tiktoken=False):
+    """Daily input, stacked by the model that was charged for it: tiktoken's count when
+    `tiktoken`, else Codex's recorded figure.
 
     `order` is the corpus-wide ranking, not the day's own: stacking in per-day order would
     reshuffle the colours from one bar to the next, and a model's colour would stop meaning
@@ -3206,10 +3215,12 @@ def _daily_svg(daily, order, domain):
     keys = [m for m in (order or []) if m][:DAILY_MODELS]
     rank = {m: i for i, m in enumerate(keys)}
     colour = lambda i: f'var(--c{i % 14})' if i < len(keys) else 'var(--dim)'
-    mx = max(d['input'] for d in dated) or 1
+    val, split = ('tiktoken_input', 'tiktoken_models') if tiktoken else ('input', 'models')
+    mx = max(d[val] for d in dated) or 1
     totals = {}
     parts = [f'<svg viewBox="0 0 {W} {DAILY_H}" data-h="{DAILY_H}" data-t="{T}" data-b="{B}" '
-             f'role="img" aria-label="daily recorded input, stacked by model">',
+             f'role="img" aria-label="daily {"" if tiktoken else "recorded "}input, stacked '
+             f'by model">',
              f'<defs><clipPath id="tcclip-daily"><rect class="clip" x="{L}" y="0" '
              f'width="{W-L-R}" height="{DAILY_H}"/></clipPath></defs>',
              '<g class="ax"></g>',
@@ -3219,8 +3230,8 @@ def _daily_svg(daily, order, domain):
         x, sx = px(a), max(px(b) - px(a), 0.001)
         parts.append(f'<g class="bar" data-a="{int(a)}" data-b="{int(b)}" '
                      f'transform="translate({x:.2f},0) scale({sx:.5f},1)">')
-        ms = d.get('models') or {}
-        segs, rest = [], d['input']
+        ms = d.get(split) or {}
+        segs, rest = [], d[val]
         for m, v in ms.items():
             if m in rank:
                 segs.append((rank[m], m, v))
@@ -3238,8 +3249,10 @@ def _daily_svg(daily, order, domain):
                          f'fill="{colour(j)}" class="mk"></rect>')
             totals[m] = totals.get(m, 0) + v
             rows.append(f'{m} {v:,}')
-        tip = (f'{d["date"]}\nrecorded {d["input"]:,}\ncached {d["cached"]:,}\n'
-               f'uncached {d["uncached"]:,}\nresponses {d["responses"]:,}'
+        tip = ((f'{d["date"]}\ninput {d[val]:,} (tiktoken)\nrecorded by Codex '
+                f'{d["input"]:,}, cached {d["cached"]:,}\n' if tiktoken else
+                f'{d["date"]}\nrecorded {d["input"]:,}\ncached {d["cached"]:,}\n')
+               + f'uncached {d["uncached"]:,}\nresponses {d["responses"]:,}'
                + ('\n' + '\n'.join(rows) if rows else ''))
         parts.append(f'<rect x="0" y="{T}" width="1" height="{DAILY_H-T-B}" '
                      f'fill="transparent"><title>{esc(tip)}</title></rect>')
@@ -3261,7 +3274,8 @@ def _daily_svg(daily, order, domain):
     # dropped in silence, because its tokens are in every total on the page.
     miss = ('' if not undated else
             f'<p class="sub">{len(undated)} undated day(s), '
-            f'{sum(d["input"] for d in undated):,} recorded input, are not drawn.</p>')
+            f'{sum(d[val] for d in undated):,} {"" if tiktoken else "recorded "}input, '
+            f'are not drawn.</p>')
     return ''.join(parts) + f'<div class="legend">{legend}</div>{miss}'
 
 
@@ -3395,20 +3409,33 @@ def render(model, public=False, style=None):
         cat_note = ('Not counted: this report was produced with --metrics-only, which reads '
                     'the usage records and does not tokenize anything.')
 
-    # `sessions` arrives sorted by recorded input, the same measure as the first tile.  The
-    # cwd is rollout content, so it is escaped like every other string from there.
+    # Input is shown as tiktoken counted it when the run tokenized (analyze, §5.7), and as
+    # Codex recorded it otherwise.  Output and caching are always Codex's: reasoning tokens
+    # are encrypted and caching is decided on the server, so neither can be counted here.
+    tk = t.get('input_source') == 'tiktoken'
+    shown = 'tiktoken_input' if tk else 'input'
+
+    # `sessions` arrives sorted by the input the first tile shows.  The cwd is rollout
+    # content, so it is escaped like every other string from there.
     top = (model.get('sessions') or [None])[0]
     top_tile = []
     if top:
         where = os.path.basename((top.get('cwd') or '').rstrip('/\\'))
         top_note = '' if public else ' &middot; '.join(html.escape(x) for x in
                                                        (str(top['session_id'])[:8], where) if x)
-        top_tile = [tile('Longest session', big(top['input']), top_note)]
+        top_tile = [tile('Longest session', big(top[shown]), top_note)]
 
     tiles = ''.join([
-        tile('Recorded input', big(t['input']), f"{t['responses']:,} responses"),
-        tile('Output', big(t['output']), f"{big(t['reasoning'])} reasoning"),
-        tile('Cache hit', pct(t['cache_hit']), f"{big(t['cached'])} cached"),
+        (tile('Input', big(t['tiktoken_input']),
+              f"counted with tiktoken &middot; {t['responses']:,} responses") if tk else
+         tile('Recorded input', big(t['input']), f"{t['responses']:,} responses")),
+        tile('Output', big(t['output']),
+             f"{big(t['reasoning'])} reasoning" + (' &middot; recorded by Codex' if tk else '')),
+        # Measured against Codex's own input, never the tiktoken count: that one misses what
+        # the logs do not keep, and cached would then exceed the input it is a share of.
+        tile('Cache hit', pct(t['cache_hit']),
+             f"{big(t['cached'])} of {big(t['input'])} recorded by Codex" if tk
+             else f"{big(t['cached'])} cached"),
         tile('Sessions', f"{t['sessions']:,}", f"{t['threads']:,} threads"),
     ] + top_tile + ([tile('Weekly limit used',
                '&mdash;' if wk_pct is None else f'{wk_pct:g}%', wk_note)]
@@ -3450,10 +3477,13 @@ def render(model, public=False, style=None):
             'order': [c['category'] for c in (model.get('categories') or [])],
             'note': cat_note,
         },
+        # Which input the charts draw: 'tiktoken' or 'recorded' (Codex's).  Labels follow it.
+        'input_source': t.get('input_source') or 'recorded',
         # The daily chart's own ranking and cap, so the model pie colours match its bars.
         'models': {
             'order': [m['model'] for m in model['models'] if m['model']][:DAILY_MODELS],
-            'days': [[d['start'], d['end'], d.get('models') or {}] for d in model['daily']
+            'days': [[d['start'], d['end'], d.get('tiktoken_models' if tk else 'models') or {}]
+                     for d in model['daily']
                      if d.get('start') is not None and d.get('end') is not None],
         },
     })
@@ -3487,7 +3517,8 @@ def render(model, public=False, style=None):
 {rl_chart}
 
 <div class="panel"><div class="chart" id="dailychart">{_daily_svg(
-    model['daily'], [m['model'] for m in model['models']], domain or [0, 1])}</div></div>
+    model['daily'], [m['model'] for m in model['models']], domain or [0, 1],
+    tiktoken=tk)}</div></div>
 
 <div class="panel pies"><div id="catpie"></div><div id="modelpie"></div></div>
 
