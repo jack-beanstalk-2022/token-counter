@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  172 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  178 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -539,7 +539,7 @@ The report now installs it itself (`tokencounter/deps.py`, called from
 
 ```
 pip install --target <CODEX_HOME>/token-counter/lib/<cache_tag><abiflags>-<platform>/ \
-            --only-binary :all: --retries 2 tiktoken
+            --only-binary :all: --retries 1 --timeout 10 tiktoken
 ```
 
 - **Only when needed.** A `tiktoken` that already imports is used as is, and `sys.path` is
@@ -552,23 +552,32 @@ pip install --target <CODEX_HOME>/token-counter/lib/<cache_tag><abiflags>-<platf
   interpreter has no pip (Debian without `python3-pip`), `uv pip install --target` is used
   if `uv` is on `PATH`.
 - **Keyed by interpreter.** `tiktoken` and `regex` are native extensions that load only in
-  the ABI they were built for, so each interpreter and platform gets its own directory.
+  the ABI they were built for, so each interpreter and platform gets its own directory. A
+  free-threaded build gets a `t` in its key even on Windows, which has no `abiflags`.
 - **Wheels only.** Without `--only-binary`, a platform with no wheel falls through to
   building the Rust extension from source, which needs a toolchain, takes minutes, and then
   fails.
 - **Staged.** pip installs into `.install-*` beside the target, and the result is renamed
   into place only after pip succeeds. An interrupted run cannot leave a `tiktoken` without
   its extension where the next run would activate it. An existing install that does not
-  import is moved aside and replaced. When two first runs race, the one that finishes second
-  keeps the first one's copy. Four concurrent runs were verified to leave one working
-  install and nothing else.
+  import is moved aside, before the download, and then replaced. On Windows a directory
+  holding an extension this process loaded cannot be moved; the run then names the
+  directory to delete instead of downloading on every run. When two first runs race, the
+  one that finishes second keeps the first one's copy. Four concurrent runs were verified
+  to leave one working install and nothing else.
 - **Prepended.** The directory goes at the front of `sys.path`. pip resolved `tiktoken`,
   `regex` and `requests` there as one set, and an older `regex` elsewhere must not be mixed
   in. Worker processes inherit `sys.path` under fork, spawn and forkserver alike, which was
   verified under all three.
 - **Never fatal.** Any failure (no network, no pip, an unwritable directory, a 300 s timeout)
   becomes the page's note, `tiktoken could not be installed: <why>.`, the run continues on
-  the usage ledger as in Rev 12, and the next run tries again.
+  the usage ledger as in Rev 12, and the next run tries again. Any exception from
+  `import tiktoken` counts as "not importable" (a foreign-ABI extension raises `OSError`),
+  and installer output is decoded leniently, so neither can escape into the run.
+- **Bounded.** One retry and a 10 s socket timeout: a network that drops packets costs about
+  20 s per run until it works or `--no-install` is passed. A sandbox that refuses the
+  network fails in about a second. A failure is not remembered: a back-off would also
+  block the re-run with network access that token-report's SKILL.md asks for.
 
 This is the report's one network call, and it breaks the old "no network, ever" line (§6).
 Nothing of the user's is sent: it is a package download from PyPI. `--no-install` or
@@ -909,7 +918,9 @@ input-by-model pie, and the cumulative curve in each limit window.
   Output is under 1% of it (§7).
 - **Fallbacks.** With `--metrics-only`, or with no tokenizer, nothing is counted, and every
   input figure is Codex's, labelled "Recorded input" as before. A charged response whose
-  file has no reconstruction keeps Codex's figure rather than contributing zero. That
+  file has no reconstruction, or whose prompt reconstructs to zero tokens, keeps Codex's
+  figure rather than contributing zero. Every request carries at least its instructions, so
+  zero means the reconstruction found nothing. That
   happens with an attribution error part-way through a file, and such responses are counted
   in `tiktoken_input_fallback` and `tiktoken_input_fallback_tokens`.
 - **JSON and share.** These keep Codex's figures under their old names: `totals.input`,
@@ -936,7 +947,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 172 cases
+│   ├── test_pipeline.py                  # §3–§7, 178 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1383,6 +1394,7 @@ Structural, not deferred work.
 | A response with no reconstruction keeps Codex's figure, and is counted | Counting it as zero would understate the input silently |
 | `analyze.tiktoken_inputs`, with a mutation case that empties it | So that reverting the switch is testable in-process. `test_input_counted_with_tiktoken` catches it |
 | `test_render` injects its hostile model name into both daily splits | The chart now draws `tiktoken_models` when the run tokenized, so a name only in `models` never reached the legend the test checks |
+| Review of both revisions, before merge: `deps.importable` catches any exception; installer output is decoded as UTF-8 with replacement; `_forget` drops everything the install provides (`regex` too); the free-threaded key; a broken install is moved aside before downloading; `report.out_dir` picks from `deps.roots`; a zero-token prompt falls back; share's client version is 1.4.0 | Each was a reachable crash or miscount. A foreign-ABI tiktoken raising `OSError` crashed `--doctor` and the run; undecodable pip output raised out of a function promising not to; a stale system `regex` could be mixed into the private install; 3.13 and 3.13t on Windows replaced each other's install; a broken install held open on Windows re-downloaded every run; the two copies of the directory list could drift apart. Each fix has a test, and each test fails with its fix reverted |
 
 **Rev 16** — `tiktoken` installs itself (§4.2). Plugin 1.4.0.
 
@@ -1623,7 +1635,7 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
 | `scripts/test_mutations.py` | **19/19** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **172/172** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
+| `scripts/test_pipeline.py` | **178/178** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
 | `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |

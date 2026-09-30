@@ -32,11 +32,20 @@ def tag():
     """``cpython-311-linux-x86_64``: what a native wheel is built for."""
     impl = (sys.implementation.cache_tag
             or f'py{sys.version_info[0]}{sys.version_info[1]}')
-    return f'{impl}{getattr(sys, "abiflags", "")}-{sysconfig.get_platform()}'
+    flags = getattr(sys, 'abiflags', '')
+    # Windows has no `abiflags`, and its free-threaded build takes different wheels (cp313t)
+    # than the default one: without the `t`, the two would replace each other's install.
+    if sysconfig.get_config_var('Py_GIL_DISABLED') and 't' not in flags:
+        flags += 't'
+    return f'{impl}{flags}-{sysconfig.get_platform()}'
 
 
 def roots():
-    """Where an install may live: ``report.out_dir()`` and its temp-directory fallback."""
+    """The plugin's state directory under ``CODEX_HOME``, then its temp-directory fallback.
+
+    ``report.out_dir()`` picks from this same list, so the directory an install lands in and
+    the ones `activate` searches cannot drift apart.
+    """
     home = os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'), '.codex')
     return [os.path.join(home, 'token-counter'),
             os.path.join(tempfile.gettempdir(), 'token-counter')]
@@ -51,18 +60,30 @@ def disabled():
     return os.environ.get(ENV_OFF, '').strip() not in ('', '0')
 
 
+# What `pip install tiktoken` puts in the directory.  A failed import can leave any of them
+# cached from elsewhere on the path -- `regex` is imported before the extension that fails
+# -- and the private install must not then run against those.  Nothing else in this
+# process imports them.
+_PROVIDED = ('tiktoken', 'tiktoken_ext', 'regex', 'requests', 'urllib3', 'idna',
+             'charset_normalizer', 'certifi')
+
+
 def _forget():
-    """Drop a half-imported ``tiktoken`` so the next import starts over from ``sys.path``."""
-    for k in [k for k in sys.modules if k.split('.')[0] in ('tiktoken', 'tiktoken_ext')]:
+    """Drop a half-imported ``tiktoken`` and its dependencies, so the next import starts
+    over from ``sys.path``."""
+    for k in [k for k in sys.modules if k.split('.')[0] in _PROVIDED]:
         del sys.modules[k]
     importlib.invalidate_caches()
 
 
 def importable():
+    """Whether ``import tiktoken`` works.  Any exception counts as no: a native extension
+    built for another ABI raises OSError, and version skew AttributeError, and both must
+    lead to the private install rather than out of the run."""
     try:
         import tiktoken  # noqa: F401
         return True
-    except ImportError:
+    except Exception:                               # noqa: BLE001 - a probe, not a handler
         _forget()
         return False
 
@@ -88,7 +109,7 @@ def installed_version():
     """``(version, file)`` of the ``tiktoken`` this process would use, or ``None``."""
     try:
         import tiktoken
-    except ImportError:
+    except Exception:                               # noqa: BLE001 - see importable()
         _forget()
         return None
     return getattr(tiktoken, '__version__', '?'), getattr(tiktoken, '__file__', '?')
@@ -127,7 +148,6 @@ def _install(target):
     leaves a ``.install-*`` directory behind, never a ``tiktoken`` without its extension.
     """
     parent = os.path.dirname(target)
-    existed = os.path.isdir(target)
     try:
         os.makedirs(parent, exist_ok=True)
         stage = tempfile.mkdtemp(prefix='.install-', dir=parent)
@@ -135,19 +155,27 @@ def _install(target):
         return f'{parent} is not writable ({exc.__class__.__name__})'
     old = stage + '.old'
     try:
+        if os.path.isdir(target):
+            # Reached only when the copy there does not import.  Moved aside, not deleted in
+            # place, so a file held open cannot leave half of it where the next run looks --
+            # and moved *before* downloading: on Windows a directory holding an extension
+            # this process loaded cannot be moved, and finding that out after the download
+            # would repeat the download on every run.
+            try:
+                os.rename(target, old)
+            except OSError as exc:
+                return (f'{target} does not import and is in use ({exc.__class__.__name__}); '
+                        f'delete that directory and run again')
         why = _run_installer(stage)
         if why:
             return why
-        if os.path.isdir(target):
-            if not existed:
+        try:
+            os.rename(stage, target)
+        except OSError as exc:
+            if os.path.isdir(os.path.join(target, 'tiktoken')):
                 return None         # a concurrent run finished first; its copy is as good
-            # The copy there does not import.  Moved aside rather than deleted in place, so
-            # a file held open (Windows) cannot leave half of it where the next run looks.
-            os.rename(target, old)
-        os.rename(stage, target)
+            return f'could not move the install into place ({exc.__class__.__name__})'
         return None
-    except OSError as exc:
-        return f'could not move the install into place ({exc.__class__.__name__})'
     finally:
         shutil.rmtree(stage, ignore_errors=True)
         shutil.rmtree(old, ignore_errors=True)
@@ -163,10 +191,13 @@ def _run_installer(stage):
     env = dict(os.environ)
     # Settings that contradict `--target`, from the user's environment or pip config.
     env.update(PIP_USER='0', PIP_REQUIRE_VIRTUALENV='0', PIP_DISABLE_PIP_VERSION_CHECK='1',
-               PIP_NO_INPUT='1')
-    # Two retries, not pip's five: where the network is filtered rather than refused, each
-    # attempt waits out the connect timeout, and the next run simply tries again.
-    pip = [sys.executable, '-m', 'pip', 'install', '--quiet', '--retries', '2'] + args
+               PIP_NO_INPUT='1', PYTHONIOENCODING='utf-8')
+    # One retry and a 10 s socket timeout, not pip's five and 15 s: where packets are dropped
+    # rather than refused, every attempt waits out the timeout, and a failed install is
+    # retried by the next run anyway.  That bounds the stall at ~20 s.  A sandbox that
+    # denies the network outright fails in about a second.
+    pip = [sys.executable, '-m', 'pip', 'install', '--quiet', '--retries', '1',
+           '--timeout', '10'] + args
     p, why = _call(pip, env)
     if why is None and p.returncode == 0:
         return None
@@ -185,8 +216,10 @@ def _run_installer(stage):
 
 def _call(cmd, env):
     try:
+        # Decoded leniently: pip writes in the console code page and uv in UTF-8, and a
+        # strict decode of either would raise out of a function that promises not to.
         p = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, timeout=TIMEOUT)
+                           encoding='utf-8', errors='replace', timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         return None, f'timed out after {TIMEOUT}s'
     except OSError as exc:

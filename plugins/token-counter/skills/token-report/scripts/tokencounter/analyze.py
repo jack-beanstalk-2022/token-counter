@@ -124,9 +124,14 @@ def tiktoken_inputs(fr):
     """``(stream, index) -> tokens`` in each response's reconstructed prompt, counted with
     tiktoken (§5.7).  Empty for a file extracted without the tokenizer, whose responses then
     keep the input Codex recorded.
+
+    A prompt that reconstructs to nothing is left out too.  Every request carries at least
+    its instructions, so zero means the reconstruction found no prompt (an empty range, or
+    only opaque items), not that the request was free: counting it would drop the response's
+    input silently, where leaving it out keeps Codex's figure and counts the fallback.
     """
     return {(r.get('stream'), r.get('index')): r['recon_input']
-            for r in (fr.get('responses') or []) if r.get('recon_input') is not None}
+            for r in (fr.get('responses') or []) if r.get('recon_input')}
 
 
 def _iso(epoch_s):

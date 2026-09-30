@@ -888,6 +888,60 @@ def test_report_installs_missing_tiktoken():
         os.environ[deps.ENV_OFF] = keep_env if keep_env is not None else '1'
 
 
+def test_install_edge_cases():
+    """The corners of `deps` a real install rarely reaches."""
+    import report as cli
+
+    # pip writes in the console code page, uv in UTF-8: neither may raise while decoding.
+    p, why = deps._call([sys.executable, '-c',
+                         'import sys; sys.stdout.buffer.write(b"ok \\xff\\xfe\\x81 done")'],
+                        dict(os.environ))
+    check('installer output that is not valid text is decoded, not raised',
+          why is None and p.stdout.startswith('ok ') and '\ufffd' in p.stdout, repr(why))
+
+    real = deps.sysconfig.get_config_var
+    deps.sysconfig.get_config_var = lambda k: 1 if k == 'Py_GIL_DISABLED' else real(k)
+    try:
+        ft = deps.tag()
+    finally:
+        deps.sysconfig.get_config_var = real
+    check('a free-threaded build gets an install directory of its own',
+          ft.split('-')[1].endswith('t'), ft)
+
+    # A broken install this process cannot move (Windows, an extension it loaded) is
+    # reported before anything is downloaded, so the next run does not download again.
+    target = deps.lib_dir(tempfile.mkdtemp())
+    os.makedirs(os.path.join(target, 'tiktoken'))
+    calls, rename, installer = [], os.rename, deps._run_installer
+
+    def held(a, b):
+        if os.path.normpath(a) == os.path.normpath(target):
+            raise PermissionError('in use')
+        return rename(a, b)
+    os.rename, deps._run_installer = held, lambda stage: calls.append(stage)
+    try:
+        why = deps._install(target)
+    finally:
+        os.rename, deps._run_installer = rename, installer
+    check('an install that cannot be moved aside is reported before any download',
+          calls == [] and 'delete that directory' in (why or '')
+          and os.path.isdir(os.path.join(target, 'tiktoken')), repr(why))
+
+    # The report writes where deps looks: one list, not two copies of it.
+    d = tempfile.mkdtemp()
+    ours = [os.path.join(d, 'home'), os.path.join(d, 'tmp')]
+    keep_roots, keep_out = deps.roots, list(cli._OUT_DIR)
+    deps.roots = lambda: list(ours)
+    cli._OUT_DIR.clear()
+    try:
+        got = cli.out_dir()
+    finally:
+        deps.roots = keep_roots
+        cli._OUT_DIR[:] = keep_out
+    check('the report writes to the directory the install is looked for in',
+          got == ours[0], got)
+
+
 def _fake_tiktoken_wheel(d, version='99.0.0'):
     """A pure-Python wheel named tiktoken, for pip to install with no network."""
     import zipfile
@@ -955,8 +1009,16 @@ def test_tiktoken_installs_itself():
           r['why'] is None and r['got'] and r['got'][0] == '99.0.0'
           and 'installing' not in err, f'{r} {err[-300:]}')
 
+    # OSError, not ImportError: what an extension built for another interpreter raises.
     with open(os.path.join(lib, 'tiktoken', '__init__.py'), 'w') as fh:
-        fh.write('raise ImportError("a broken install")\n')
+        fh.write('raise OSError("an extension built for another interpreter")\n')
+    doc = subprocess.run([sys.executable, '-I', '-S', os.path.join(LIB, 'report.py'), '--doctor',
+                          '--sessions-root', empty],
+                         env=dict(os.environ, CODEX_HOME=home), capture_output=True, text=True,
+                         timeout=120)
+    check('--doctor reports a tiktoken that raises on import, instead of crashing on it',
+          doc.returncode == 1 and '! tiktoken' in doc.stdout and 'Traceback' not in doc.stderr,
+          f'rc={doc.returncode}\n{doc.stdout[-600:]}\n{doc.stderr[-600:]}')
     r, err = run(home, wheels)
     check('an install that no longer imports is replaced',
           r['why'] is None and r['got'] and r['got'][0] == '99.0.0', f'{r} {err[-300:]}')
@@ -1400,6 +1462,18 @@ def test_input_counted_with_tiktoken():
           and mf['totals']['tiktoken_input'] == 15000 + next(
               x['tiktoken_input'] for x in m['sessions'] if x['session_id'] == 'B'),
           f"{mf['totals']} {q}")
+
+    # A prompt that reconstructs to zero tokens is a reconstruction that found nothing, and
+    # falls back the same way rather than adding nothing.
+    data = {p: worker.process(p) for p in rollout.discover(corpus)}
+    for resp in data[gone]['responses']:
+        resp['recon_input'] = 0
+    charged, counters = ledger.build(data)
+    mz = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    check('a prompt that reconstructs to nothing keeps Codex\'s input, and is counted',
+          mz['quality']['tiktoken_input_fallback'] == 3
+          and mz['totals']['tiktoken_input'] == mf['totals']['tiktoken_input'],
+          f"{mz['totals']} {mz['quality']}")
 
 
 # --------------------------------------------------------------- account and rate limits
@@ -1849,6 +1923,7 @@ def main():
     test_environment_degrades()
     test_report_installs_missing_tiktoken()
     test_tiktoken_installs_itself()
+    test_install_edge_cases()
     test_account_claims()
     test_rate_limit_windows()
     test_cumulative_curve_is_monotonic()

@@ -33,7 +33,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tokencounter import account as accountlib  # noqa: E402
-from tokencounter import analyze, index, ledger, render, rollout, worker  # noqa: E402
+from tokencounter import analyze, deps, index, ledger, render, rollout, worker  # noqa: E402
 
 # Fixed input for the tokenizer fingerprint in `_extractor_version`.  Exercises the parts of
 # the split pattern most likely to differ between implementations: contractions, CJK, an
@@ -146,7 +146,9 @@ def out_dir():
     """
     if _OUT_DIR:
         return _OUT_DIR[0]
-    d = os.path.join(codex_home(), 'token-counter')
+    # The same two directories tiktoken's private install is looked for in (deps.roots).
+    home, fallback = deps.roots()
+    d = home
     try:
         os.makedirs(d, exist_ok=True)
         probe = os.path.join(d, '.writable')
@@ -154,10 +156,10 @@ def out_dir():
             pass
         os.remove(probe)
     except OSError as exc:
-        d = os.path.join(tempfile.gettempdir(), 'token-counter')
+        d = fallback
         os.makedirs(d, exist_ok=True)
-        print(f'{os.path.join(codex_home(), "token-counter")} is not writable '
-              f'({exc.__class__.__name__}); using {d}', file=sys.stderr)
+        print(f'{home} is not writable ({exc.__class__.__name__}); using {d}',
+              file=sys.stderr)
     _OUT_DIR.append(d)
     return d
 
@@ -517,7 +519,6 @@ def tokenizer_status(a):
     (``tokencounter/deps.py``).  Not when the vocabulary is missing, which no install fixes.
     Separated from `main` so the mutation harness can put the old behaviour back.
     """
-    from tokencounter import deps
     from tokencounter import encoding as tcenc
     install_failed = None
     if (not a.no_install and not deps.disabled()
@@ -614,7 +615,6 @@ def doctor(a):
                       or 'not available'), bool(acct.get('available')))
 
     print('\ntokenizer')
-    from tokencounter import deps
     if not deps.importable():
         deps.activate()
     got = deps.installed_version()
