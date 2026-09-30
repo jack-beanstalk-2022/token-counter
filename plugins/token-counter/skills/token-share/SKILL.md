@@ -1,13 +1,15 @@
 ---
 name: token-share
-description: Share Codex token usage with the public tokenusage.dev leaderboard, update a previous share, or delete it. Use only when the user explicitly asks to share, publish, post or upload their token usage or report, to join or update the tokenusage.dev leaderboard, or to remove their data from it. For a private local report, use token-report instead.
+description: Share Codex token usage with the public tokenusage.dev leaderboard and get a link to the report page, update a previous share, or delete it. Use only when the user explicitly asks to share, publish, post or upload their token usage or report, to join or update the tokenusage.dev leaderboard, or to remove their data from it. For a private local report, use token-report instead.
 ---
 
 # Token Share
 
 Sends a summary of the user's Codex token usage to **tokenusage.dev**, where it appears on
 public leaderboards (most tokens in a month, longest session, biggest session, most active
-days) and on a public profile page at `https://tokenusage.dev/u/<handle>`.
+days) and on a public profile page at `https://tokenusage.dev/u/<handle>`. It also publishes
+the token-report page itself at `https://tokenusage.dev/r/<handle>`: the same page, charts and
+styles the user gets locally, for anyone they send the link to.
 
 This is the only part of the plugin that uses the network, and it sends nothing unless run
 with `--yes`. The numbers come from the same canonical usage ledger as token-report, so the
@@ -24,7 +26,9 @@ Run from this skill's directory, with `python3` on macOS and Linux or `python` o
    ```
 
 2. Show the user the summary it printed: the handle, the date range, the totals, and the
-   per-month lines. Tell them the leaderboard is **public**.
+   per-month lines. Tell them the leaderboard is **public**, and that the report page the dry
+   run wrote (the `report page` line gives its path) is published as is: anyone with the link
+   sees it. They can open that file to check it first.
 3. On a first share, ask which **handle** they want shown (3-24 characters: lowercase
    letters, digits, hyphens). Do not invent one, and do not derive it from their account,
    email or machine name.
@@ -35,7 +39,12 @@ Run from this skill's directory, with `python3` on macOS and Linux or `python` o
    python3 scripts/share.py --yes                         # every later share
    ```
 
-   The last line of output is their profile URL. Give it to them.
+   The last line of output is their report URL, `report: https://tokenusage.dev/r/<handle>`.
+   Give it to them; the line before it is their profile on the leaderboard.
+
+   The shared page opens in Clinical unless `--style` says otherwise. If the user says which
+   style they use locally (Clinical, Matisse or Nocturne), or asks for one, pass it:
+   `--style matisse`. Readers can still switch styles on the page.
 
 Sending needs network access. Inside the Codex sandbox the network is usually off, so the
 `--yes` command must run with network access the user approves. The dry run needs none.
@@ -48,6 +57,13 @@ hash of its id, start and end times, active time, token counts and the model nam
 each weekly rate-limit window, its start, the plan type and the percentages used that Codex
 logged in its rate-limit snapshots, and the tokens counted in it. tokenusage.dev uses the
 windows to estimate how many tokens each plan's weekly limit holds.
+
+Also sent, unless `--no-report`: the report page, rendered by token-report with `--public`.
+It carries the charts' data (daily recorded input by model, the cumulative token curve and
+reported percentage of each weekly limit window over time, and content composition by
+category in hourly buckets) and the headline numbers. It leaves out the two machine strings
+the local page shows, the top session's id and its directory name, and never reads
+`auth.json`. The server serves it in a sandbox: its scripts run, and it can reach nothing.
 
 Never sent: prompts, outputs, tool results, file contents or paths, working directories,
 session titles, anything from `auth.json`, or the account email. The plan type comes from
@@ -62,6 +78,9 @@ without sending it.
 python3 scripts/share.py                        # dry run
 python3 scripts/share.py --out payload.json     # write the payload, send nothing
 python3 scripts/share.py --handle NEW --yes     # rename (the old handle is released)
+python3 scripts/share.py --yes --style nocturne # the shared page opens in Nocturne
+python3 scripts/share.py --yes --no-report      # the numbers only, no report page
+python3 scripts/share.py --delete-report --yes  # take the report page down, keep the numbers
 python3 scripts/share.py --delete               # say what would be deleted
 python3 scripts/share.py --delete --yes         # delete everything shared, forget the token
 python3 scripts/share.py --forget               # drop the local token only
@@ -82,7 +101,7 @@ from this machine; `--forget` then lets the user start over under a new handle.
   day and month its first response landed in.
 - **Active time** is the time between consecutive responses in a session, leaving out any
   gap longer than 30 minutes. Wall-clock span is shown beside it.
-- Each share replaces the months it contains. Months no longer in the logs (pruned rollout
+- Each share replaces the months it contains, and the report page as a whole. Months no longer in the logs (pruned rollout
   files) stay as they were last shared.
 
 Every figure is self-reported. The server rejects arithmetic no log can produce, but it
@@ -95,4 +114,8 @@ cannot verify a report, and the site says so.
 - `bad_token` (401) -- the stored token was rejected. `--forget`, then share under a handle.
 - `rate_limited` (429) -- too many shares this hour; later.
 - `could not reach` -- no network: approve network access for the command, or try later.
+- `report page not published` -- the numbers were shared (the profile line printed) but the
+  page was not; the message says why. Sharing again retries it.
+- `report page could not be built` -- token-report failed; the numbers can still be shared.
+  Run token-report's `--doctor`.
 - `No rollout files found` -- same as token-report; `--sessions-root` or `CODEX_HOME`.

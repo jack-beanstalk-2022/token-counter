@@ -938,6 +938,20 @@ payload: it is built from ledger rows, the rate-limit snapshots, and three field
 result (`session_id`, `date`, and the row timestamps), and the test asserts the exact key set.
 The `plan_type` in it is the rollout's, never `auth.json`'s.
 
+Since 1.3.0 a share also publishes the report page (§7) at `/r/<handle>`, so the link the
+user gets opens the same page they have locally. `share.py` runs token-report's own `main`
+with `--public --no-open`, which renders the page from the full pipeline (the index is used
+as usual) with two differences: the top-session tile drops its note, the session id prefix
+and the `cwd` basename, the only strings on the page taken from the machine rather than
+counted; and `auth.json` is not read. `--style` bakes the style the page opens in, which the
+page falls back to when the reader has none remembered. The page is written to disk on the
+dry run, so what goes public can be opened first, and on `--yes` it is gzipped and `PUT`
+after the numbers under the same token. tokenusage.dev serves it with
+`Content-Security-Policy: sandbox allow-scripts` and nothing else allowed, so it runs with an
+opaque origin and can fetch or post nothing; the page needs nothing more, being built to
+render offline. `scripts/test_share.py` asserts the page sent is the page the dry run wrote,
+and that no prompt, directory or session id is in it.
+
 It is dry-run by default and sends only with `--yes`. A damaged record with cached > input
 or reasoning > output is clamped and counted rather than failing the share, because the
 server rejects that arithmetic outright. The first share returns a bearer token, stored per

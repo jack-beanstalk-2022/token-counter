@@ -5,19 +5,25 @@
     share.py --handle NAME --yes      # first share: claim NAME on the leaderboard
     share.py --yes                    # later shares: update the numbers
     share.py --out payload.json       # write the exact payload to a file, send nothing
+    share.py --delete-report --yes    # take the report page down, keep the numbers
     share.py --delete --yes           # remove everything shared, and forget the token
 
 The token-report skill never touches the network. This script is the one exception, and it
 sends only when run with --yes. What it sends is daily token counts, a handful of
 per-session summaries -- counts, times and a model name -- and, per weekly rate-limit window,
-the plan and percentage the server reported beside the tokens counted in it. Never prompts,
-file contents, paths, session titles, or anything from auth.json. See the SKILL.md next to
-this file.
+the plan and percentage the server reported beside the tokens counted in it. Beside the
+numbers it publishes the token-report page itself, rendered for the public, so the link it
+prints opens the same page the user has locally. Never prompts, file contents, paths, session
+titles, or anything from auth.json. See the SKILL.md next to this file.
 """
 import argparse
+import base64
 import collections
+import contextlib
 import datetime
+import gzip
 import hashlib
+import io
 import json
 import os
 import sys
@@ -29,9 +35,9 @@ REPORT = os.path.normpath(os.path.join(HERE, '..', '..', 'token-report', 'script
 sys.path.insert(0, REPORT)
 
 import report as reportcli  # noqa: E402  -- enforces the Python floor on import
-from tokencounter import analyze, ledger, rollout, worker  # noqa: E402
+from tokencounter import analyze, ledger, render, rollout, worker  # noqa: E402
 
-CLIENT = {'name': 'token-counter', 'version': '1.2.0'}
+CLIENT = {'name': 'token-counter', 'version': '1.3.0'}
 SCHEMA = 1
 DEFAULT_API = 'https://tokenusage.dev/api'
 
@@ -234,6 +240,50 @@ def build_payload(results, charged, handle=None, now=None):
     return payload, notes
 
 
+# ------------------------------------------------------------------------ the report page
+
+def report_path():
+    return os.path.join(reportcli.out_dir(), 'report-shared.html')
+
+
+def build_report(a):
+    """Render the page that is published at /r/<handle>: token-report's own page over every
+    session, with --public (no session id, no directory name, auth.json unread).
+
+    It is written to disk first, dry run or not, so the user can open exactly what would go
+    public. Returns ``(path, None)`` or ``(None, why)``.
+    """
+    out = report_path()
+    argv = ['--public', '--no-open', '--out', out]
+    if a.style:
+        argv += ['--style', a.style]
+    if a.sessions_root:
+        argv += ['--sessions-root', a.sessions_root]
+    if a.fast:
+        argv.append('--fast')
+    if a.procs:
+        argv += ['--procs', str(a.procs)]
+    if a.quiet:
+        argv.append('--quiet')
+    try:
+        # The report prints its summary and the path on stdout; this script's stdout is the
+        # share summary, so that goes nowhere. Progress and warnings still reach stderr.
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = reportcli.main(argv)
+    except (FileNotFoundError, ValueError, ImportError, OSError) as exc:
+        return None, str(exc).strip().splitlines()[0] if str(exc).strip() else repr(exc)
+    if code != 0 or not os.path.exists(out):
+        return None, f'token-report exited with {code}'
+    return out, None
+
+
+def report_body(path):
+    with open(path, 'rb') as fh:
+        page = fh.read()
+    return {'schema': SCHEMA, 'client': dict(CLIENT),
+            'html_gz': base64.b64encode(gzip.compress(page, 9)).decode('ascii')}
+
+
 # ------------------------------------------------------------------------ local state
 
 def state_path():
@@ -402,6 +452,13 @@ def main(argv=None):
     ap.add_argument('--out', metavar='PATH', help='write the payload as JSON, send nothing')
     ap.add_argument('--delete', action='store_true',
                     help='with --yes: delete everything shared from this machine\'s token')
+    ap.add_argument('--no-report', action='store_true',
+                    help='share the numbers only, not the report page')
+    ap.add_argument('--style', choices=[sid for sid, _ in render.STYLES],
+                    help='the style the shared report opens in (default: '
+                         f'{render.STYLES[0][0]}); readers can still switch')
+    ap.add_argument('--delete-report', action='store_true',
+                    help='with --yes: take the report page down, keep the shared numbers')
     ap.add_argument('--forget', action='store_true',
                     help='drop the locally stored token without contacting the server')
     ap.add_argument('--api', default=os.environ.get('TOKENUSAGE_API') or DEFAULT_API,
@@ -421,6 +478,29 @@ def main(argv=None):
         save_state(state)
         print(f"forgot the token for {api}"
               + (f" (handle {mine['handle']})" if mine.get('handle') else ''))
+        return 0
+
+    if a.delete_report:
+        if not mine.get('token'):
+            print(f'nothing to delete: no share token for {api} on this machine', file=sys.stderr)
+            return 2
+        if not a.yes:
+            print(f"would take down the report page of {mine.get('handle')!r} on {api}, and keep "
+                  f"the shared numbers.\nre-run with --delete-report --yes to do it.")
+            return 0
+        try:
+            status, body = request('DELETE', f'{api}/report', token=mine['token'])
+        except OSError as exc:
+            print(f'could not reach {api}: {exc}', file=sys.stderr)
+            return 6
+        if status != 200:
+            print(_explain(status, body), file=sys.stderr)
+            return 7
+        mine.pop('report_url', None)
+        set_endpoint_state(state, api, mine)
+        save_state(state)
+        print(f"took down the report page of {mine.get('handle')!r}"
+              + ('' if isinstance(body, dict) and body.get('deleted') else ' (there was none)'))
         return 0
 
     if a.delete:
@@ -462,6 +542,19 @@ def main(argv=None):
     shown = handle or mine.get('handle')
     print(describe(payload, notes, shown, api))
 
+    page = None
+    if not a.no_report and not a.out:
+        page, why = build_report(a)
+        if page:
+            print(f'\nreport page  {page} ({os.path.getsize(page) / 1e3:,.0f} KB)\n'
+                  f'             published as is: anyone with the link sees this page. Open it '
+                  f'to check.\n             it holds the charts\' data: daily input by model, '
+                  f'the weekly limit\n             curves over time, and content composition by '
+                  f'category. --no-report leaves it out.')
+        else:
+            print(f'\nreport page  could not be built ({why}); the numbers can still be shared',
+                  file=sys.stderr)
+
     if a.out:
         with open(a.out, 'w', encoding='utf-8') as fh:
             json.dump(payload, fh, indent=1)
@@ -496,6 +589,23 @@ def main(argv=None):
     save_state(state)
     verb = 'shared' if body.get('created') else 'updated'
     print(f"\n{verb}: {body.get('url')}")
+    if not page:
+        return 0
+
+    # The numbers are in; the page goes up under the same token. A failure here leaves the
+    # share as it is and says so, rather than pretending the link exists.
+    try:
+        status, rbody = request('PUT', f'{api}/report', body=report_body(page), token=entry['token'])
+    except OSError as exc:
+        print(f'report page not published: could not reach {api}: {exc}', file=sys.stderr)
+        return 8
+    if status != 200 or not isinstance(rbody, dict) or not rbody.get('url'):
+        print('report page not published: ' + _explain(status, rbody), file=sys.stderr)
+        return 8
+    entry['report_url'] = rbody['url']
+    set_endpoint_state(state, api, entry)
+    save_state(state)
+    print(f"report: {rbody['url']}")
     return 0
 
 

@@ -10,8 +10,8 @@ entirely. The report makes no network call at any point: no daemon, no intercept
 conversion of tokens into money or rate-limit consumption.
 
 The one exception is opt-in and separate: the `token-share` skill posts daily token counts to
-the public leaderboard at [tokenusage.dev](https://tokenusage.dev), and only when you ask it to
-and confirm with `--yes`. See [Sharing](#sharing).
+the public leaderboard at [tokenusage.dev](https://tokenusage.dev), with your report page at a
+link you can send, and only when you ask it to and confirm with `--yes`. See [Sharing](#sharing).
 
 ## Install
 
@@ -56,8 +56,16 @@ cd plugins/token-counter/skills/token-share
 python scripts/share.py                        # dry run: prints what would be sent, sends nothing
 python scripts/share.py --handle NAME --yes    # first share: claims NAME on the leaderboard
 python scripts/share.py --yes                  # every later share
+python scripts/share.py --yes --style matisse  # the shared page opens in Matisse
+python scripts/share.py --delete-report --yes  # take the report page down, keep the numbers
 python scripts/share.py --delete --yes         # remove everything you shared
 ```
+
+The last line a share prints is your report, `https://tokenusage.dev/r/<handle>`: the same
+page as your local report, in the same three styles, for anyone you send the link to. It is
+rendered with token-report's `--public`, which leaves out the top session's id and directory
+name; the dry run writes it to `~/.codex/token-counter/report-shared.html` so you can open
+exactly what will be published. `--no-report` shares the numbers without it.
 
 What is sent is counted from the same canonical ledger as the report, so the leaderboard and
 your local report agree day for day: per-day responses, recorded input, cached input, output
