@@ -7,8 +7,9 @@
     report.py --fast                   # every core instead of half
     report.py --json out.json          # machine-readable model, no HTML
 
-Reads ~/.codex/sessions/**/rollout-*.jsonl and nothing else. No network, no daemon,
-no interception. See ARCHITECTURE.md.
+Reads ~/.codex/sessions/**/rollout-*.jsonl, and ~/.codex/auth.json for the account name.
+No daemon, no interception, and no network -- except, once, to install tiktoken from PyPI
+when it is missing (--no-install turns that off).  See ARCHITECTURE.md.
 """
 import argparse
 import collections
@@ -303,6 +304,9 @@ def main(argv=None):
                          'and auth.json is not read')
     ap.add_argument('--no-account', action='store_true',
                     help='do not read ~/.codex/auth.json; the report then names no account')
+    ap.add_argument('--no-install', action='store_true',
+                    help='do not install tiktoken from PyPI when it is missing; the content '
+                         'composition is then empty (also TOKEN_COUNTER_NO_INSTALL=1)')
     ap.add_argument('--vocab', metavar='PATH', help='override the vendored BPE path')
     ap.add_argument('--sessions-root', metavar='PATH', help='override ~/.codex/sessions')
     ap.add_argument('--quiet', action='store_true')
@@ -352,16 +356,9 @@ def main(argv=None):
     # path, chosen deliberately instead of forced.
     tokenizer_note = None
     if not a.metrics_only:
-        try:
-            from tokencounter import encoding as tcenc
-            tcenc.load(a.vocab)
-        except (ImportError, FileNotFoundError, ValueError) as exc:
-            tokenizer_note = str(exc).strip().splitlines()[0]
+        tokenizer_note = tokenizer_status(a)
+        if tokenizer_note:
             a.metrics_only = True
-            print(f'tokenizer unavailable: {tokenizer_note}\n'
-                  f'  continuing with the usage ledger only; content composition will be '
-                  f'empty.\n'
-                  f'  run --doctor for the full picture', file=sys.stderr)
 
     extractor = _extractor_version(a.vocab)
     db_path = os.path.join(out_dir(), 'index.db')
@@ -500,6 +497,45 @@ def main(argv=None):
             cache.close()
 
 
+def tokenizer_status(a):
+    """Build the tokenizer, installing tiktoken first when nothing provides it.
+
+    Returns ``None`` when content can be tokenized, otherwise the one line the page shows in
+    place of the content composition.  `codex plugin add` installs no Python packages, so
+    without this a fresh install never counted content until someone ran pip by hand; the
+    first run that needs tiktoken now installs it into a directory of its own
+    (``tokencounter/deps.py``).  Not when the vocabulary is missing, which no install fixes.
+    Separated from `main` so the mutation harness can put the old behaviour back.
+    """
+    from tokencounter import deps
+    from tokencounter import encoding as tcenc
+    install_failed = None
+    if (not a.no_install and not deps.disabled()
+            and os.path.isfile(tcenc.vendor_path(a.vocab))):
+        install_failed = deps.ensure(out_dir())
+    elif not deps.importable():
+        deps.activate()                         # an earlier run's install, if there is one
+    try:
+        tcenc.load(a.vocab)
+        return None
+    except (ImportError, FileNotFoundError, ValueError) as exc:
+        retry = ''
+        if isinstance(exc, ImportError) and install_failed:
+            note = install_failed + '.'
+            retry = '  the next run tries again; --no-install skips the attempt\n'
+        elif isinstance(exc, ImportError):
+            # The exception's first line ends "Install it with:", and the page shows only
+            # that line.
+            note = 'tiktoken is not importable; "python -m pip install tiktoken" installs it.'
+        else:
+            note = str(exc).strip().splitlines()[0]
+    print(f'tokenizer unavailable: {note}\n'
+          f'  continuing with the usage ledger only; content composition will be empty.\n'
+          f'{retry}'
+          f'  run --doctor for the full picture', file=sys.stderr)
+    return note
+
+
 def doctor(a):
     """Print every environment assumption this tool makes, and whether it holds.
 
@@ -568,11 +604,22 @@ def doctor(a):
                       or 'not available'), bool(acct.get('available')))
 
     print('\ntokenizer')
+    from tokencounter import deps
+    if not deps.importable():
+        deps.activate()
+    got = deps.installed_version()
+    if got:
+        line('tiktoken', f'{got[0]} ({os.path.dirname(got[1])})')
+    else:
+        line('tiktoken', 'not installed -- ' + (
+            'installing is turned off; python -m pip install tiktoken'
+            if a.no_install or deps.disabled() else
+            f'the next report run installs it into {deps.lib_dir(out_dir())}'), False)
     try:
         from tokencounter import encoding as enc
         vp = enc.vendor_path(a.vocab)
         line('vocabulary', vp, os.path.exists(vp))
-        if os.path.exists(vp):
+        if os.path.exists(vp) and got:
             e = enc.load(a.vocab)
             line('probe', f'{len(e.encode(TOKENIZER_PROBE)):,} tokens from the '
                           f'{len(TOKENIZER_PROBE)}-char probe')

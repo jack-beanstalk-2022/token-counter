@@ -11,9 +11,11 @@ days) and on a public profile page at `https://tokenusage.dev/u/<handle>`. It al
 the token-report page itself at `https://tokenusage.dev/r/<handle>`: the same page, charts and
 styles the user gets locally, for anyone they send the link to.
 
-This is the only part of the plugin that uses the network, and it sends nothing unless run
-with `--yes`. The numbers come from the same canonical usage ledger as token-report, so the
-leaderboard and the local report agree day for day.
+This is the only part of the plugin that sends anything over the network, and it sends
+nothing unless run with `--yes`. (token-report's one other network call downloads `tiktoken`
+from PyPI when it is missing. The share never does that, so the page published on `--yes` is
+the page the dry run wrote.) The numbers come from the same canonical usage ledger as
+token-report, so the leaderboard and the local report agree day for day.
 
 Run from this skill's directory, with `python3` on macOS and Linux or `python` on Windows.
 

@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  142 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  162 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -528,6 +528,58 @@ error, and any encoding mismatch. A small residual does not confirm the tokenize
 large one does not localize to it. The residual is published as an unexplained quantity;
 it is never used as evidence that the encoding is right.
 
+### 4.2 Installing tiktoken
+
+`codex plugin add` copies the plugin directory and nothing else. The manifest has no field
+for Python dependencies and no install step, so on a fresh install `tiktoken` was missing and
+the content panel was empty until the user ran pip by hand. Most users never did.
+
+The report now installs it itself (`tokencounter/deps.py`, called from
+`report.tokenizer_status`), the first time a run needs it:
+
+```
+pip install --target <CODEX_HOME>/token-counter/lib/<cache_tag><abiflags>-<platform>/ \
+            --only-binary :all: --retries 2 tiktoken
+```
+
+- **Only when needed.** A `tiktoken` that already imports is used as is, and `sys.path` is
+  not touched. `--metrics-only` never installs, and neither does a run whose vocabulary is
+  missing, since no install would fix that.
+- **Nothing in the user's environment.** `--target` writes only into the plugin's own
+  directory: no site-packages, no `--user`, and no PEP 668 override (pip skips the
+  externally-managed check for `--target`). `PIP_USER` and `PIP_REQUIRE_VIRTUALENV` are
+  cleared for the pip process, because either one makes `--target` fail. When the
+  interpreter has no pip (Debian without `python3-pip`), `uv pip install --target` is used
+  if `uv` is on `PATH`.
+- **Keyed by interpreter.** `tiktoken` and `regex` are native extensions that load only in
+  the ABI they were built for, so each interpreter and platform gets its own directory.
+- **Wheels only.** Without `--only-binary`, a platform with no wheel falls through to
+  building the Rust extension from source, which needs a toolchain, takes minutes, and then
+  fails.
+- **Staged.** pip installs into `.install-*` beside the target, and the result is renamed
+  into place only after pip succeeds. An interrupted run cannot leave a `tiktoken` without
+  its extension where the next run would activate it. An existing install that does not
+  import is moved aside and replaced. When two first runs race, the one that finishes second
+  keeps the first one's copy. Four concurrent runs were verified to leave one working
+  install and nothing else.
+- **Prepended.** The directory goes at the front of `sys.path`. pip resolved `tiktoken`,
+  `regex` and `requests` there as one set, and an older `regex` elsewhere must not be mixed
+  in. Worker processes inherit `sys.path` under fork, spawn and forkserver alike, which was
+  verified under all three.
+- **Never fatal.** Any failure (no network, no pip, an unwritable directory, a 300 s timeout)
+  becomes the page's note, `tiktoken could not be installed: <why>.`, the run continues on
+  the usage ledger as in Rev 12, and the next run tries again.
+
+This is the report's one network call, and it breaks the old "no network, ever" line (§6).
+Nothing of the user's is sent: it is a package download from PyPI. `--no-install` or
+`TOKEN_COUNTER_NO_INSTALL=1` turns it off. `share.py` always passes `--no-install`. The
+share's dry run usually has no network and its `--yes` run does, so installing there would
+publish a page with a panel the dry run lacked (§6.1).
+
+The cache key needs no change. `_extractor_version` fingerprints the tokenizer by what it
+returns (Rev 10), so going from no tokenizer to an installed one moves the key, and so does
+a later upgrade.
+
 ---
 
 ## 5. Analysis
@@ -839,7 +891,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 111 cases
+│   ├── test_pipeline.py                  # §3–§7, 162 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -861,6 +913,7 @@ tokenCounter/
                     ├── classify.py   # payload -> (category, text) segments
                     ├── images.py     # dimensions from a 4 KiB prefix, token range
                     ├── encoding.py   # vendored o200k_base construction
+                    ├── deps.py       # installs tiktoken on first use (§4.2)
                     ├── worker.py     # one file: parse, tokenize, reconstruct prompts
                     ├── ledger.py     # the canonical usage ledger
                     ├── index.py      # SQLite cache
@@ -899,14 +952,17 @@ report.py --json model.json        # machine-readable model
 report.py --no-open                # write the file, do not launch a browser
 report.py --include-archived       # count sessions whose rollout file is gone
 report.py --rebuild                # discard the index and re-parse
+report.py --no-install             # never install tiktoken (§4.2)
 ```
 
 `SKILL.md` also carries the four caveats that must survive into anything the model says about
 the output — recorded ≠ billed, cached is a subset, leads are not findings, the residual does
 not validate the tokenizer — because the report is easy to over-read.
 
-No MCP server, no daemon, no background process. The report makes no network call at any
-point; §6.1 is the one opt-in exception, in a skill of its own.
+No MCP server, no daemon, no background process. The report sends nothing anywhere. Its one
+network call is the first-use `tiktoken` install from PyPI (§4.2), which `--no-install` turns
+off. §6.1 is the one opt-in exception, in a skill of its own, and the only code that sends
+anything.
 
 ### 6.1 Sharing to tokenusage.dev
 
@@ -1269,6 +1325,17 @@ Structural, not deferred work.
 
 ## 10. Revision history
 
+**Rev 16** — `tiktoken` installs itself (§4.2). Plugin 1.4.0.
+
+| Change | Cause |
+| --- | --- |
+| `tokencounter/deps.py`: the first run that needs `tiktoken` installs it with `pip install --target` into `<CODEX_HOME>/token-counter/lib/<interpreter>-<platform>/` | Reported: `tiktoken` was not installed with the plugin. `codex plugin add` copies files and has no dependency step, so every fresh install ran with an empty content panel. The README called `tiktoken` optional, and in practice that meant it was never installed |
+| The tokenizer setup moved out of `main` into `report.tokenizer_status`, with a mutation case restoring the old "load or give up" behaviour | So that reverting the fix is testable in-process. `test_report_installs_missing_tiktoken` catches it |
+| `--no-install` / `TOKEN_COUNTER_NO_INSTALL=1`; `share.py` always passes `--no-install` | The install is a network call, and the report had promised none. A share must publish the page its dry run showed |
+| The page note for a missing `tiktoken` is a whole sentence | It used the exception's first line, which ended in "Install it with:" and stopped there |
+| `--doctor` reports the `tiktoken` version and where it was imported from, or where the next run will install it | "Not installed", "installed privately" and "installed by the user" produce the same report and need different fixes |
+| `test_tiktoken_installs_itself` runs the real pip, offline, against a hand-built wheel, in `-I -S` interpreters | It must pass on a machine that already has `tiktoken`, and must never reach PyPI. It checks install, reuse without pip, replacing a broken install, failing cleanly, and the opt-out |
+
 **Rev 15** — after round 10 of review, the third against the code. Five defects confirmed by
 repro before being fixed — one of them the Rev-7 baseline bug back in a third of the corpus,
 and one a test that could not fail.
@@ -1496,8 +1563,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | Check | Result |
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
-| `scripts/test_mutations.py` | **17/17** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **149/149** across tokenizer, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
+| `scripts/test_mutations.py` | **18/18** historical defects reverted, each caught by the test named for it |
+| `scripts/test_pipeline.py` | **162/162** across tokenizer, installing `tiktoken` on first use, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), and the shared time axis the three charts are drawn on |
 | `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |

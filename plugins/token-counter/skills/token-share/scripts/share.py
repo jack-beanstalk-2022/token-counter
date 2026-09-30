@@ -8,8 +8,9 @@
     share.py --delete-report --yes    # take the report page down, keep the numbers
     share.py --delete --yes           # remove everything shared, and forget the token
 
-The token-report skill never touches the network. This script is the one exception, and it
-sends only when run with --yes. What it sends is daily token counts, a handful of
+The token-report skill sends nothing anywhere; its one network call installs tiktoken from
+PyPI when it is missing. This script is the one thing that sends, and it sends only when
+run with --yes. What it sends is daily token counts, a handful of
 per-session summaries -- counts, times and a model name -- and, per weekly rate-limit window,
 the plan and percentage the server reported beside the tokens counted in it. Beside the
 numbers it publishes the token-report page itself, rendered for the public, so the link it
@@ -254,7 +255,10 @@ def build_report(a):
     public. Returns ``(path, None)`` or ``(None, why)``.
     """
     out = report_path()
-    argv = ['--public', '--no-open', '--out', out]
+    # --no-install: the dry run usually has no network and `--yes` does, so letting the
+    # report install tiktoken here would publish a page with a panel the dry run lacked.
+    # A tiktoken that token-report already installed is still used.
+    argv = ['--public', '--no-open', '--no-install', '--out', out]
     if a.style:
         argv += ['--style', a.style]
     if a.sessions_root:

@@ -21,7 +21,10 @@ LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    'plugins', 'token-counter', 'skills', 'token-report', 'scripts')
 sys.path.insert(0, LIB)
 
-from tokencounter import analyze, classify, encoding, images, ledger, render, rollout, worker  # noqa: E402
+# No test may reach PyPI. The two that exercise installing lift this for their own runs.
+os.environ['TOKEN_COUNTER_NO_INSTALL'] = '1'
+
+from tokencounter import analyze, classify, deps, encoding, images, ledger, render, rollout, worker  # noqa: E402
 
 RESULTS = []
 
@@ -815,6 +818,160 @@ def test_environment_degrades():
           f'rc={rc}\n{text}')
 
 
+# --------------------------------------------------------------------------- installing tiktoken
+
+def test_report_installs_missing_tiktoken():
+    """A run that tokenizes asks for tiktoken to be installed beside its index; a run that
+    cannot use it, or was told not to install, never asks; a failed install costs the panel.
+
+    `deps.ensure` is replaced with a recorder, so nothing is installed and nothing leaves
+    the machine. The install itself is `test_tiktoken_installs_itself`.
+    """
+    root, home, _ = _indexed_corpus([('019bbbbb-0000-7000-8000-000000000001', 3)])
+    calls = []
+    keep_ensure, keep_load = deps.ensure, encoding.load
+    keep_env = os.environ.pop(deps.ENV_OFF, None)
+
+    def run(cli, *extra):
+        calls.clear()
+        out = os.path.join(home, 'm.json')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = cli.main(['--sessions-root', root, '--no-open', '--no-account', '--quiet',
+                           '--no-cache', '--json', out, *extra])
+        with open(out, encoding='utf-8') as fh:
+            return rc, list(calls), json.load(fh), err.getvalue()
+
+    try:
+        deps.ensure = lambda r: calls.append(r)
+        with _codex_home(home) as cli:
+            rc, got, _, _ = run(cli)
+            check('a run that tokenizes installs tiktoken, beside the index',
+                  rc == 0 and got == [cli.out_dir()], f'rc={rc} calls={got}')
+            for extra, why in ((['--no-install'], '--no-install'),
+                               (['--metrics-only'], '--metrics-only, which never tokenizes'),
+                               (['--vocab', os.path.join(home, 'none.tiktoken')],
+                                'no vocabulary, which no install fixes')):
+                rc, got, _, _ = run(cli, *extra)
+                check(f'no install is attempted with {why}', rc == 0 and got == [],
+                      f'rc={rc} calls={got}')
+            os.environ[deps.ENV_OFF] = '1'
+            rc, got, _, _ = run(cli)
+            os.environ.pop(deps.ENV_OFF)
+            check('no install is attempted with TOKEN_COUNTER_NO_INSTALL=1',
+                  rc == 0 and got == [], f'rc={rc} calls={got}')
+
+            reason = 'tiktoken could not be installed: PyPI is unreachable (no network access?)'
+            deps.ensure = lambda r: reason
+
+            def missing(path=None):
+                raise ImportError('tiktoken is required but not importable. Install it with:\n'
+                                  '    python -m pip install tiktoken')
+            encoding.load = missing
+            rc, _, model, err = run(cli)
+            sc = model['scope']
+            check('a failed install costs one panel, and the page says why',
+                  rc == 0 and sc['metrics_only'] and sc['tokenizer_note'] == reason + '.',
+                  f'rc={rc} scope={sc}')
+            check('a failed install says the next run tries again',
+                  'the next run tries again' in err, err)
+
+            rc, _, model, _ = run(cli, '--no-install')
+            note = model['scope']['tokenizer_note'] or ''
+            check('without an install, the note is a sentence that says how to get it',
+                  rc == 0 and note.endswith('installs it.') and 'with:' not in note, note)
+    finally:
+        deps.ensure, encoding.load = keep_ensure, keep_load
+        os.environ[deps.ENV_OFF] = keep_env if keep_env is not None else '1'
+
+
+def _fake_tiktoken_wheel(d, version='99.0.0'):
+    """A pure-Python wheel named tiktoken, for pip to install with no network."""
+    import zipfile
+    info = f'tiktoken-{version}.dist-info'
+    files = {
+        'tiktoken/__init__.py': f'__version__ = {version!r}\n',
+        f'{info}/METADATA': f'Metadata-Version: 2.1\nName: tiktoken\nVersion: {version}\n',
+        f'{info}/WHEEL': ('Wheel-Version: 1.0\nGenerator: test_pipeline\n'
+                          'Root-Is-Purelib: true\nTag: py3-none-any\n'),
+    }
+    files[f'{info}/RECORD'] = ''.join(f'{k},,\n' for k in files) + f'{info}/RECORD,,\n'
+    os.makedirs(d, exist_ok=True)
+    with zipfile.ZipFile(os.path.join(d, f'tiktoken-{version}-py3-none-any.whl'), 'w') as z:
+        for k, v in files.items():
+            z.writestr(k, v)
+
+
+def test_tiktoken_installs_itself():
+    """`deps.ensure` really installs, once, into CODEX_HOME, and never into the interpreter.
+
+    Each run is a fresh interpreter started with ``-I -S``, so a tiktoken already installed
+    on this machine is invisible to it, and pip is pointed at a local wheel instead of PyPI.
+    """
+    d = tempfile.mkdtemp()
+    wheels, empty = os.path.join(d, 'wheels'), os.path.join(d, 'empty')
+    _fake_tiktoken_wheel(wheels)
+    os.makedirs(empty)
+    code = (
+        'import json, sys\n'
+        f'sys.path.insert(0, {LIB!r})\n'
+        'from tokencounter import deps\n'
+        'why = deps.ensure(deps.roots()[0])\n'
+        'try:\n'
+        '    import tiktoken\n'
+        '    got = [tiktoken.__version__, tiktoken.__file__]\n'
+        'except ImportError:\n'
+        '    got = None\n'
+        'print(json.dumps({"why": why, "got": got}))\n'
+    )
+
+    def run(home, links, **env):
+        e = dict(os.environ, CODEX_HOME=home, PIP_CONFIG_FILE=os.devnull, PIP_NO_INDEX='1',
+                 PIP_FIND_LINKS=links, PIP_NO_CACHE_DIR='1')
+        e.pop(deps.ENV_OFF, None)
+        e.update(env)
+        p = subprocess.run([sys.executable, '-I', '-S', '-c', code], env=e,
+                           capture_output=True, text=True, timeout=300)
+        try:
+            return json.loads(p.stdout.strip().splitlines()[-1]), p.stderr
+        except (ValueError, IndexError):
+            return {'why': f'rc={p.returncode} {p.stderr[-300:]}', 'got': None}, p.stderr
+
+    home = os.path.join(d, 'home')
+    lib = deps.lib_dir(os.path.join(home, 'token-counter'))
+    r, err = run(home, wheels)
+    check('a missing tiktoken is installed into CODEX_HOME/token-counter/lib/<interpreter>',
+          r['why'] is None and r['got'] and r['got'][0] == '99.0.0'
+          and os.path.dirname(os.path.dirname(r['got'][1])) == lib
+          and 'installing it' in err, f'{r} {err[-300:]}')
+
+    # With nothing for pip to find, a second install could only fail: the run must use the
+    # first one without starting pip at all.
+    r, err = run(home, empty)
+    check('a later run reuses the install without running pip',
+          r['why'] is None and r['got'] and r['got'][0] == '99.0.0'
+          and 'installing' not in err, f'{r} {err[-300:]}')
+
+    with open(os.path.join(lib, 'tiktoken', '__init__.py'), 'w') as fh:
+        fh.write('raise ImportError("a broken install")\n')
+    r, err = run(home, wheels)
+    check('an install that no longer imports is replaced',
+          r['why'] is None and r['got'] and r['got'][0] == '99.0.0', f'{r} {err[-300:]}')
+
+    fresh = os.path.join(d, 'fresh')
+    r, err = run(fresh, empty)
+    left = os.listdir(os.path.join(fresh, 'token-counter', 'lib'))
+    check('a failed install says why, raises nothing, and leaves nothing half-installed',
+          r['got'] is None and isinstance(r['why'], str) and 'could not be installed' in r['why']
+          and left == [], f'{r} left={left}')
+
+    off = os.path.join(d, 'off')
+    r, err = run(off, wheels, TOKEN_COUNTER_NO_INSTALL='1')
+    check('TOKEN_COUNTER_NO_INSTALL=1 installs nothing and says so',
+          r['got'] is None and deps.ENV_OFF in (r['why'] or '')
+          and not os.path.exists(os.path.join(off, 'token-counter')), f'{r} {err[-300:]}')
+
+
 # --------------------------------------------------------------------------- the index, end to end
 
 def _explicit_rollout(sid, n, day='2026-09-20'):
@@ -1568,6 +1725,8 @@ def main():
     test_day_span_across_clock_changes()
     test_daily_model_split()
     test_environment_degrades()
+    test_report_installs_missing_tiktoken()
+    test_tiktoken_installs_itself()
     test_account_claims()
     test_rate_limit_windows()
     test_cumulative_curve_is_monotonic()

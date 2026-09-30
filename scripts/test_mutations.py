@@ -309,6 +309,25 @@ def _fixed_offset_day():
     return lambda: setattr(analyze, '_day_span', orig)
 
 
+@case('a missing tiktoken is left missing',
+      lambda: tp.test_report_installs_missing_tiktoken())
+def _never_installs():
+    # Before 1.4.0: load the tokenizer or give up.  `codex plugin add` installs no Python
+    # packages, so on a fresh install this gave up every time.
+    orig = rp.tokenizer_status
+
+    def old(a):
+        from tokencounter import encoding as tcenc
+        try:
+            tcenc.load(a.vocab)
+            return None
+        except (ImportError, FileNotFoundError, ValueError) as exc:
+            return str(exc).strip().splitlines()[0]
+
+    rp.tokenizer_status = old
+    return lambda: setattr(rp, 'tokenizer_status', orig)
+
+
 def main():
     print(f'{len(CASES)} mutations\n')
     bad = 0

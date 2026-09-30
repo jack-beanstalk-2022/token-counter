@@ -6,11 +6,12 @@ description: Build a local HTML report of Codex token usage from rollout logs. U
 # Token Report
 
 Re-tokenizes `~/.codex/sessions/**/rollout-*.jsonl` locally and renders a self-contained HTML
-dashboard. Every figure comes from rollout logs; `~/.codex/auth.json` is read only to name the
-account (id_token identity claims — never the access or refresh tokens, and `--no-account`
-skips it). Nothing is intercepted, nothing is sent anywhere, and no pricing translation is
-applied. Publishing numbers to the tokenusage.dev leaderboard is a different skill,
-token-share, used only when the user asks to share.
+dashboard. Every figure comes from rollout logs; `~/.codex/auth.json` is read only to name
+the account (id_token identity claims — never the access or refresh tokens, and
+`--no-account` skips it). Nothing is intercepted, nothing of the user's is sent anywhere, and
+no pricing translation is applied. The one network call is installing `tiktoken` from PyPI,
+once, when it is missing (see below). Publishing numbers to the tokenusage.dev leaderboard is
+a different skill, token-share, used only when the user asks to share.
 
 Run from this skill's directory. Use whichever interpreter name exists on the machine:
 `python3` on macOS and Linux, `python` on Windows, where `python3` is usually a Microsoft
@@ -22,6 +23,20 @@ python  scripts/report.py            # Windows
 ```
 
 That covers every session, writes `~/.codex/token-counter/report-all.html`, and opens it.
+
+## First run: tiktoken installs itself
+
+Installing the plugin does not install Python packages. When `tiktoken` is not importable,
+the first run installs it with `pip install --target` into
+`~/.codex/token-counter/lib/<interpreter>-<platform>/` and prints
+`tiktoken is not installed; installing it for token-counter (once, from PyPI)`. The user's own
+Python environment is not changed, and later runs reuse that directory without the network.
+
+That install needs network access, which the Codex sandbox usually blocks. If the output says
+`tiktoken could not be installed: PyPI is unreachable`, the report was still written, with
+every usage figure exact and only the content composition empty. Tell the user, and offer to
+re-run the same command once with network access they approve. Do not run `pip install`
+yourself instead. If the user does not want anything downloaded, pass `--no-install`.
 
 ## Options
 
@@ -35,6 +50,7 @@ python3 scripts/report.py --json model.json           # machine-readable model
 python3 scripts/report.py --no-open                   # write the file, do not launch a browser
 python3 scripts/report.py --rebuild                   # discard the index and re-parse
 python3 scripts/report.py --no-account                # do not read auth.json
+python3 scripts/report.py --no-install                # never install tiktoken from PyPI
 python3 scripts/report.py --sessions-root PATH       # a corpus somewhere else
 python3 scripts/report.py --doctor                   # what this machine provides, then exit
 ```
@@ -81,9 +97,10 @@ Quoting the reported percentage and the reset times is fine; those are recorded 
 - `tokenizer unavailable` — the run continues without it. `tiktoken` and the vendored
   vocabulary are needed only for content composition, so the headline numbers, the weekly
   limit chart and the daily chart are still exact and the fourth panel says why it is empty.
-  To get it back: `python3 -m pip install tiktoken`, and `python3 scripts/fetch_vocab.py`
-  once from the repository root. Vendoring is a packaging step, not a runtime download; the
-  plugin never fetches at runtime.
+  If the reason is that `tiktoken` could not be installed, re-run with network access (see
+  *First run*). A missing or corrupt vocabulary is fixed with `python3 scripts/fetch_vocab.py`
+  once from the repository root; that is a packaging step, and the report never downloads
+  the vocabulary.
 - `No rollout files found` — Codex has not written any sessions yet, or `CODEX_HOME` points
   elsewhere. The message prints the directory it searched. Pass `--sessions-root` to override.
 - `index unusable` / `process pool unavailable` — both are optimisations and both degrade on
