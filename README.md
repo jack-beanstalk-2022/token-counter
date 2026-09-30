@@ -47,6 +47,28 @@ codex plugin marketplace add ./token-counter
 codex plugin add token-counter@jack-beanstalk-2022
 ```
 
+### Desktop app
+
+Codex in the ChatGPT desktop app installs from the same marketplace, but has no documented way
+to add one, so the marketplace has to be made known to it first. Either register it with the
+CLI:
+
+```
+codex plugin marketplace add jack-beanstalk-2022/token-counter
+```
+
+or clone this repository and open it as a project: the app picks up
+`.agents/plugins/marketplace.json` from a project's root without being told. Then restart the
+app, open **Plugins**, choose the **jack-beanstalk-2022** source and install **Token Counter**.
+Once the marketplace is known, this link opens the same install flow:
+
+```
+codex://plugins/install/token-counter?marketplace=jack-beanstalk-2022
+```
+
+Start a new chat afterwards; skills load only in chats begun after the install. The skills run
+`python3` (`python` on Windows), which must be 3.8 or newer and on the app's `PATH`.
+
 ## Sharing
 
 Ask Codex to "share my token usage to tokenusage.dev", or run it directly:
