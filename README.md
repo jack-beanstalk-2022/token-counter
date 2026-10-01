@@ -222,7 +222,7 @@ machine you are on.
 ```
 python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock o200k_base
 python scripts/test_ledger.py            # 13 response-identity regressions
-python scripts/test_pipeline.py          # 232 pipeline assertions
+python scripts/test_pipeline.py          # 237 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
 python scripts/test_share.py             # the share payload, its privacy and its transport
 python scripts/bench.py                  # the parallelism grid
@@ -232,6 +232,11 @@ python scripts/verify_install.py         # the installed plugin is this code
 python scripts/diag_fork.py              # independent witness for fork-replay exclusion
 python scripts/ref_bpe.py                # pure-Python BPE oracle
 ```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the four test scripts and
+`node scripts/test_page.js` on every pull request and every push to `main`, on Ubuntu and
+Windows with Python 3.8 and 3.14, plus `fetch_vocab.py --verify`. The rest need a real
+`~/.codex` corpus or an installed plugin, so they stay manual.
 
 ## Design
 

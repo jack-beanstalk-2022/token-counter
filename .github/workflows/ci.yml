@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.8 is the floor the README promises. Ubuntu is pinned because setup-python has no
+        # 3.8 build for any image after 24.04.
+        os: [ubuntu-24.04, windows-latest]
+        python: ['3.8', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install tiktoken
+        run: python -m pip install tiktoken
+
+      # Without tiktoken, test_mutations.py counts the ImportError as a caught mutation and
+      # reports green, so a missing install has to stop the job here.
+      - name: tiktoken imports
+        id: deps
+        run: python -c "import tiktoken; from importlib.metadata import version; print('tiktoken', version('tiktoken'))"
+
+      # Every suite runs once the dependencies are in, so one failure does not hide another.
+      - name: test_ledger.py
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: python scripts/test_ledger.py
+
+      - name: test_pipeline.py
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: python scripts/test_pipeline.py
+
+      - name: test_mutations.py
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: python scripts/test_mutations.py
+
+      - name: test_share.py
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: python scripts/test_share.py
+
+      - name: test_page.js
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: node scripts/test_page.js
+
+  vocabulary:
+    name: vocabulary and manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install tiktoken
+        run: python -m pip install tiktoken
+
+      # --verify skips the parity check and still exits 0 when it cannot download stock
+      # o200k_base, so the parity line itself is required.
+      - name: fetch_vocab.py --verify
+        shell: bash
+        run: |
+          python scripts/fetch_vocab.py --verify | tee verify.txt
+          grep -q '^parity : OK' verify.txt
+
+      - name: Manifests parse, and token-share reports the plugin's version
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import json, re
+          json.load(open('.agents/plugins/marketplace.json', encoding='utf-8'))
+          plugin = json.load(open('plugins/token-counter/.codex-plugin/plugin.json', encoding='utf-8'))
+          share = open('plugins/token-counter/skills/token-share/scripts/share.py', encoding='utf-8').read()
+          client = re.search(r"CLIENT = \{'name': 'token-counter', 'version': '([^']+)'\}", share)
+          assert client, 'CLIENT not found in share.py'
+          assert client.group(1) == plugin['version'], (
+              f"share.py sends {client.group(1)}, plugin.json says {plugin['version']}")
+          print('plugin', plugin['version'])
+          EOF

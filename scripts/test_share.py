@@ -405,8 +405,11 @@ def test_transport():
         check('the report page goes up after the numbers, under the new token',
               Stub.calls[-1] is put and put[1] == '/api/report'
               and put[2] == f'Bearer {Stub.token}' and put[3]['schema'] == 1)
-        with open(shared, encoding='utf-8') as fh:
-            check('the page sent is the page the dry run showed', _page(put) == fh.read())
+        # Bytes, not text: the report writes the page in text mode, so on Windows the file
+        # holds CRLF and is sent as it is, and a text-mode read would turn it back into LF.
+        with open(shared, 'rb') as fh:
+            check('the page sent is the page the dry run showed',
+                  _page(put) == fh.read().decode('utf-8'))
         with open(state, encoding='utf-8') as fh:
             saved = json.load(fh)['endpoints'][api]
         check('the token is stored', saved.get('token') == Stub.token and saved['handle'] == 'tester')
