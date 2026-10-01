@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  231 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  237 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -1030,12 +1030,15 @@ response with uncached input among thousands cannot set the input rate alone, an
 design (two columns moving together) drops a column rather than the fit. At most 4,000
 responses, evenly spaced in time, place the line. Each
 response's time **above the pace** is its time minus the line, floored at zero; the rest is
-called the work. The page shows the overhead, the output rate and the share above the pace
-per model, the overall share, and the median time above the pace by local hour of the day,
-where load shows up. Every one of those is starred as an estimate. A model with too few
-responses has no line, and its time above the pace is unavailable (`None`), never zero; the
-overall share covers the fitted models only, and the page and terminal line say how much of
-all response time that is when it is not all of it (`responses.fitted_share`).
+called the work. None of the estimate is on the page, whose response-time chart (§7) shows
+only measured times. The overhead, the output rate and the share above the pace per model,
+and the median time above the pace by local hour of the day and by day, are in `--json`
+(`latency.groups[].fit`, `latency.hours`, `latency.daily`), with turn and tool time; the
+terminal line carries the overall share, worded as an estimate. A
+model with too few responses has no line, and its time above the pace is unavailable
+(`None`), never zero; the overall share covers the fitted models only, and the terminal line
+says how much of all response time that is when it is not all of it
+(`responses.fitted_share`).
 
 It is **not a queue time**, and is never called one. Above the line lands queueing and
 retries, but also a slow stretch of generation and ordinary variation; the line itself sits
@@ -1079,7 +1082,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 231 cases
+│   ├── test_pipeline.py                  # §3–§7, 237 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1188,10 +1191,10 @@ user gets opens the same page they have locally. `share.py` runs token-report's 
 with `--public --no-open`, which renders the page from the full pipeline (the index is used
 as usual) with two differences: the top-session tile drops its note, the session id prefix
 and the `cwd` basename, the only strings on the page taken from the machine rather than
-counted; the response-time panel goes too (response times by model and effort, the
-hour-of-day profile in the machine's local time, turn time) but leaves out its tool table,
-whose names (MCP servers among them) come from the machine too; and `auth.json` is not
-read. The dry run and the token-share skill both list the panel among what is published. `--style` bakes the style the page opens in, which the
+counted; and `auth.json` is not read. The response-time chart goes with the rest: the
+median and p90 response time per day. Tool names, which come from the machine
+(MCP servers among them), are on neither page. The dry run and the token-share skill both
+list the chart among what is published. `--style` bakes the style the page opens in, which the
 page falls back to when the reader has none remembered. The page is written to disk on the
 dry run, so what goes public can be opened first, and on `--yes` it is gzipped and `PUT`
 after the numbers under the same token. tokenusage.dev serves it with
@@ -1218,7 +1221,7 @@ Single self-contained HTML, dark/light, no external requests — **151 KB** over
 of vanilla JS over an embedded JSON blob. A test asserts the output contains no `http://` or
 `https://` reference at all.
 
-Five headline numbers and three charts. Everything else the model carries — sessions,
+The headline numbers and four charts. Everything else the model carries — sessions,
 reconciliation, images, the window table, the data-quality counters — is reported through
 `--json` and the stdout summary, not here (rev 12).
 
@@ -1228,14 +1231,18 @@ reconciliation, images, the window table, the data-quality counters — is repor
 2. **Cumulative tokens per weekly limit window** — tiktoken input plus Codex's output,
    restarting at zero at every reset, with the reported percentage overlaid (§5.6)
 3. **Daily input**, stacked by the model that was charged for it
-4. **What filled the window** — independently tokenized content, by category
-5. **Response time** (§5.8) — per model and effort, the median and p90 with the estimated
-   overhead, output rate and share above the pace; the median time above the pace by hour
-   of the day; turn time and the model's share of it; and tool time by tool. It has no time
-   axis, so it sits below the three charts and outside the shared viewport. It is a tile and
-   a panel because the tiles are what every style draws: Nocturne's 3D scene shows the tile
-   and not the panel, which is still on its flat sheet for assistive tech. The hour chart is
-   CSS columns rather than SVG, so its labels keep their size on a phone.
+4. **Response time by day** (§5.8) — two lines, the median response (solid, `--uncached`)
+   and the p90 (dashed, `--dim`), a point at the middle of each day. A third chart on the
+   shared time axis (§7.1), drawn by the page (`drawLat`) as the limit chart's curves are,
+   over a value axis fixed over the corpus and rounded up to a clean ceiling. A day with
+   fewer than five timed responses is not a point, and it and any day with none break the
+   line rather than letting it bridge them; every day keeps a hover target that says what it
+   has. Nocturne shows it as a sixth exhibit with a builder of its own (`N3.lines`): a lit
+   tube for the median, a dashed one for the p90, a hover target a day.
+5. **What filled the window** — independently tokenized content, by category
+
+The per-model response times and pace estimates, the hour of day, turns and tools are in
+`--json` only (rev 19 removed the panel that showed them).
 
 Every figure derived from inference rather than measurement carries a visible `inference`
 badge; measurements carry a neutral `measured` badge. The page opens with a standing note
@@ -1354,15 +1361,16 @@ sparks fall, and nothing is drawn between changes.
 
 ### 7.1 One time axis, one viewport
 
-Charts 2 and 3 answer different questions about the same hours, and are only useful together
-if a moment can be found in both. They are drawn over **one domain**, at one viewBox width,
-with one pair of margins, and they carry the same ticks — generated once per redraw and
-handed to both — so a date sits at the same x in each and a spike in one can be traced to a
-day in the other. The domain covers the limit series, the daily buckets and the content
-buckets, so nothing the page can draw falls outside it.
+Charts 2, 3 and 4 answer different questions about the same hours, and are only useful
+together if a moment can be found in each. They are drawn over **one domain**, at one viewBox
+width, with one pair of margins, and they carry the same ticks — generated once per redraw
+and handed to all three — so a date sits at the same x in each and a spike in one (a slow
+day) can be traced to the others (the usage that day, the limit it spent). The domain covers
+the limit series, the daily buckets, the response-time days and the content buckets, so
+nothing the page can draw falls outside it.
 
-The viewport is shared. Scrolling, dragging or pinching **either** chart moves both, and a
-double-click on either returns both to the full range. Wheel zoom and the double-click
+The viewport is shared. Scrolling, dragging or pinching **any** of them moves all three, and
+a double-click on one returns them all to the full range. Wheel zoom and the double-click
 **glide** rather than jump, in every style: the view eases toward its goal over about a
 quarter of a second, as a true zoom -- the moment that sits at the same x in the view it
 leaves and the view it reaches stays put the whole way, and the span changes geometrically --
@@ -1381,7 +1389,7 @@ only.** Each chart's value axis is fixed over the corpus, never over the viewpor
 height and a curve's height mean the same thing at every zoom level; rescaling y to the
 visible slice would make two views of the same chart quietly incomparable.
 
-Chart 4 has no time axis of its own, so it follows the viewport by filtering. Tokenized
+Chart 5 has no time axis of its own, so it follows the viewport by filtering. Tokenized
 content is deduplicated **per rollout file** (§3.3), which makes the file the finest unit its
 categories can honestly be placed on: `analyze` buckets each file's categories at the hour
 the file opened (`CAT_BUCKET_S`), and a bucket counts when it overlaps the visible range.
@@ -1538,6 +1546,18 @@ Structural, not deferred work.
 ---
 
 ## 10. Revision history
+
+**Rev 20** — response time by day, on the shared time axis (§7, §7.1). Plugin 1.6.0.
+
+| Change | Cause |
+| --- | --- |
+| A response-time chart under the daily input: two lines, the median and the p90 response per day | Requested: response time was a tile and a table, with no way to see a slow day against the usage and the limit around it. It was first drawn as bars capped by the estimated time above the pace; on request it became the two measured lines, and the estimate left the page |
+| Drawn by the page (`drawLat`) from per-day rows, as the limit chart's curves are, with the same ticks and `X` | A line's points move with the viewport. The page test asserts every point sits at the middle of its day at the page's own `X` -- over that day's bar in the daily chart -- at full extent, zoomed and on a phone, and that the 3D builder makes a hover target a day |
+| Days come with `analyze._day_span` spans and a p90, and a row each in the page payload | The spans are the daily bars' own, DST handling included |
+| A day under five timed responses is not a point, and a thin or missing day breaks the line | One slow response is not a slow day, and a line across a gap would draw days that have no data. The page test checks no two consecutive points of a line are more than a day and a half apart, and fails when the line bridges |
+| The response-time panel below the pies is removed; the chart carries only its legend, and a chart with nothing timed says why | Requested. The tile and the chart carry response time on the page; the per-model table, the hour of day, turns and tools stay in `--json` |
+| `test_page.js` builds each bar chart's stub from its own markup | It took every bar after `id="dailychart"`, so the new chart's bars would have been read as daily input |
+| The page fixture gives the response-time days enough responses to draw, and keeps one thin | The shared fixture times one response a day, which draws no point and would leave the shared-axis checks nothing to move; the thin day and the corpus's own two-day gap give the line two breaks to keep |
 
 **Rev 19** — the vocabulary is parsed from its own file, and CI runs every suite. Plugin 1.5.1.
 
@@ -1817,8 +1837,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
 | `scripts/test_mutations.py` | **31/31** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **231/231** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
-| `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
+| `scripts/test_pipeline.py` | **237/237** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
+| `node scripts/test_page.js` | **54/54** on the page's own embedded script: shared ticks across all three time charts, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |
 | `scripts/diag_fork.py` | the known fork pair matches for exactly **37 records at parent index 95** — an independent witness for the §2.5 rule |

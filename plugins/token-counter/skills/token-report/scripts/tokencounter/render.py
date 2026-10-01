@@ -89,31 +89,6 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .chart.inplot{cursor:grab}
 .chart.drag{cursor:grabbing}
 .pie{flex:0 0 auto;width:240px;max-width:100%}
-.ph{font-weight:600;font-size:15px;margin:0 0 4px}
-.ph2{font-weight:600;font-size:13px;margin:16px 0 6px}
-.lat-sum{margin:2px 0 4px;font-variant-numeric:tabular-nums}
-.lat-turns{margin:14px 0 4px}
-.lat .sub{margin-top:8px}
-.tbl{overflow-x:auto;margin:10px 0 4px}
-.tbl table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
-.tbl th{color:var(--dim);font-weight:500;text-align:left;padding:5px 12px 5px 0;
-  border-bottom:1px solid var(--line);white-space:nowrap}
-.tbl td{padding:5px 12px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
-.tbl .num{text-align:right}
-.tbl .dim{color:var(--dim)}
-.hrs{display:grid;grid-template-columns:auto 1fr;column-gap:8px;margin-top:6px}
-.hrs-y{position:relative;min-width:26px;font-size:11px;line-height:14px;color:var(--dim);
-  font-variant-numeric:tabular-nums}
-.hrs-y span{position:absolute;right:0}
-.hrs-y span:first-child{top:-7px}
-.hrs-y span:last-child{bottom:-7px}
-.hrs-plot{display:grid;grid-template-columns:repeat(24,1fr);height:120px;
-  border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-.hrs-col{display:flex;align-items:flex-end;justify-content:center;height:100%}
-.hrs-col:hover{background:var(--line)}
-.hrs-col i{display:block;width:min(24px,64%);background:var(--uncached);border-radius:4px 4px 0 0}
-.hrs-x{grid-column:2;display:grid;grid-template-columns:repeat(24,1fr);margin-top:4px;
-  font-size:11px;color:var(--dim);text-align:center;white-space:nowrap}
 .pies{display:flex;flex-wrap:wrap;gap:24px 48px}
 .pies>div{flex:1 1 380px;min-width:0}
 @media(max-width:640px){.wrap{padding:18px 12px 60px} .tile .v{font-size:19px}}
@@ -227,9 +202,6 @@ STYLE_CSS = r"""
 [data-style="matisse"] .panel:nth-child(even){box-shadow:10px 10px 0 -2px var(--blush)}
 [data-style="matisse"] .panel.pies{box-shadow:-10px 10px 0 -2px var(--straw)}
 [data-style="matisse"] .legend{color:var(--dim)}
-[data-style="matisse"] .ph{font:italic 400 24px/1.2 var(--serif)}
-[data-style="matisse"] .lat-sum b{font:400 22px/1 var(--serif)}
-[data-style="matisse"] .panel.lat{box-shadow:10px 10px 0 -2px var(--blush)}
 [data-style="matisse"] .legend i{width:12px;height:12px;border-radius:60% 40% 55% 45%/55% 60% 40% 45%}
 [data-style="matisse"] .pie path{stroke-width:3;stroke-linejoin:round}
 /* The area under the cumulative curve is a flat sage sheet, cut along the ink line. */
@@ -284,7 +256,6 @@ STYLE_CSS = r"""
   box-shadow:inset 0 1px 0 rgba(224,178,79,.18)}
 [data-style="nocturne"] .tile .v{font-weight:400;color:#f6e7c1}
 [data-style="nocturne"] .panel{border-color:#2a3e49;box-shadow:inset 0 1px 0 rgba(224,178,79,.14)}
-[data-style="nocturne"] .ph{font:italic 400 20px/1.2 var(--serif);color:var(--warn)}
 
 /* The scene is running: it fills the window, and the page beneath it stays in place for
    assistive tech -- every number is still text there -- but is not painted and takes no
@@ -319,6 +290,16 @@ const day = t => new Date(t*1000).toLocaleDateString([], {month:'short', day:'nu
 const hm  = t => new Date(t*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 const clamp = (v,a,b) => v<a?a:(v>b?b:v);
 const byId = id => document.getElementById(id);
+/** A duration as render.secs writes it: 0.84s, 8.4s, 34s, 2m 05s, 1h 05m. */
+const secs = x => {
+  if(x == null) return '--';
+  if(x < 0.995) return x.toFixed(2)+'s';
+  if(x < 9.95) return x.toFixed(1)+'s';
+  if(x < 59.5) return x.toFixed(0)+'s';
+  const m = Math.floor(Math.round(x)/60), sc = Math.round(x) % 60;
+  return m < 60 ? `${m}m ${String(sc).padStart(2,'0')}s`
+                : `${Math.floor(m/60)}h ${String(m%60).padStart(2,'0')}m`;
+};
 
 const HOUR = 3600, DAY = 86400;
 
@@ -552,7 +533,92 @@ function drawDaily(tk){
   marks(host, ()=>svg, [W, H], [L, 0, PLOT, H], mk, [L, T, PLOT, H-B-T]);
 }
 
-// ---- chart 3: what filled the window -------------------------------------------------
+// ---- chart 3: response time by day ----------------------------------------------------
+// Two lines over the days: the median response and the p90.  Drawn here, like the limit
+// chart's curves, because a line's points move with the viewport; its heights never do --
+// the value axis is fixed over the corpus.  A day with fewer than LAT_MIN timed responses is
+// not a point (one slow response is not a slow day) and breaks the line, as a day with none
+// does; it keeps a hover target that says so.
+const LATD = D.latency || {};
+const LDAYS = LATD.days || [];                // [start, end, timed responses, median, p90]
+const LAT_MIN = LATD.min || 5;
+const latOk = (r, k) => r[2] >= LAT_MIN && r[k] != null;
+let LMAX = 0;
+LDAYS.forEach(r => { if(latOk(r, 3)) LMAX = Math.max(LMAX, latOk(r, 4) ? r[4] : r[3]); });
+const LSHOWN = LMAX > 0;
+// A clean ceiling, so the axis reads 0 / 45s / 1m 30s rather than 0 / 34s / 1m 09s.
+LMAX = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 600, 900, 1200, 1800, 2700, 3600]
+  .find(c => c >= LMAX) || LMAX || 1;
+/** The two series, as the page and the 3D scene both draw them. */
+const LSERIES = [{k: 3, c: '--uncached', w: 2, dash: null},
+                 {k: 4, c: '--dim', w: 1.6, dash: [5, 3]}];
+/** Runs of consecutive drawable days for series column `k`; a gap or a thin day ends one. */
+function latRuns(k){
+  const runs = [];
+  let cur = [], prevEnd = null;
+  for(const r of LDAYS){
+    const ok = latOk(r, k);
+    if(!ok || (prevEnd != null && r[0] - prevEnd > HOUR)){ if(cur.length) runs.push(cur); cur = []; }
+    if(ok){ cur.push(r); prevEnd = r[1]; } else prevEnd = null;
+  }
+  if(cur.length) runs.push(cur);
+  return runs;
+}
+function drawLat(tk){
+  const host = byId('latchart');
+  if(!host) return;
+  if(!LSHOWN){
+    // Nothing timed at all: the server's own sentence says why, and stays.
+    if(LDAYS.length) host.innerHTML = `<p class="sub">No day in range has ${LAT_MIN} or more `+
+                                      `timed responses, so none is drawn.</p>`;
+    marks(host, null);
+    return;
+  }
+  const H = G.lat_h || 190, T = 18, B = 34;
+  const y = v => H-B - (v/LMAX)*(H-B-T);
+  let s = `<svg viewBox="0 0 ${W} ${H}" data-h="${H}" data-t="${T}" data-b="${B}" role="img" `+
+          `aria-label="median and p90 response time by day">`;
+  s += `<defs><clipPath id="tcclip-lat"><rect x="${L}" y="0" width="${PLOT}" height="${H}"/>`+
+       `</clipPath></defs>`;
+  [0, .5, 1].forEach(f=>{
+    const yy = y(LMAX*f);
+    s += `<line x1="${L}" y1="${yy.toFixed(1)}" x2="${W-RM}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
+    s += `<text x="${L-8}" y="${(yy+4).toFixed(1)}" text-anchor="end" fill="var(--dim)" font-size="11">${f ? esc(secs(LMAX*f)) : '0'}</text>`;
+  });
+  s += axis(H, T, B, tk);
+  s += `<g clip-path="url(#tcclip-lat)">`;
+  const mk = [];
+  const mid = r => (r[0] + r[1])/2;
+  for(const se of LSERIES){
+    for(const run of latRuns(se.k)){
+      const pts = run.map(r => [X(mid(r)), y(r[se.k])]);
+      if(pts.length > 1){
+        s += `<path d="${pts.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ')}" `+
+             `fill="none" stroke="var(${se.c})" stroke-width="${se.w}" stroke-linejoin="round" `+
+             `stroke-linecap="round"${se.dash ? ` stroke-dasharray="${se.dash.join(' ')}"` : ''} class="mk"/>`;
+        mk.push(se.dash ? {t:'line', pts, w: se.w, c: se.c, dash: se.dash} : {t:'line', pts, w: se.w, c: se.c});
+      }
+      // A dot on every day, so a day standing alone between two gaps is still seen.
+      for(const p of pts)
+        s += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${se.dash ? 2.5 : 3}" fill="var(${se.c})"/>`;
+    }
+  }
+  for(const r of LDAYS){
+    const x0 = X(r[0]), x1 = X(r[1]);
+    if(x1 < L || x0 > W-RM) continue;
+    const tip = `${day(r[0])}\n${r[2].toLocaleString()} timed responses` +
+                (latOk(r, 3) ? `\nmedian ${secs(r[3])}, p90 ${secs(r[4])}` : `\ntoo few to show`);
+    s += `<rect x="${x0.toFixed(1)}" y="${T}" width="${Math.max(0, x1-x0).toFixed(1)}" height="${H-T-B}" `+
+         `fill="transparent"><title>${esc(tip)}</title></rect>`;
+  }
+  s += `</g>`;
+  s += `<line x1="${L}" y1="${H-B}" x2="${W-RM}" y2="${H-B}" stroke="var(--line)"/>`;
+  s += '</svg>';
+  host.innerHTML = s;
+  marks(host, ()=>host.querySelector('svg'), [W, H], [L, 0, PLOT, H], mk, [L, T, PLOT, H-B-T]);
+}
+
+// ---- chart 4: what filled the window -------------------------------------------------
 // Tokenized content is deduplicated per rollout file, so the file is the finest unit its
 // categories can honestly be placed on: a bucket carries the content of the files that
 // opened inside it, and counts here when it overlaps the visible range.
@@ -742,6 +808,7 @@ function redraw(){
   const tk = VIEW ? ticks() : [];
   drawRL(tk);
   drawDaily(tk);
+  drawLat(tk);
   schedulePies();
 }
 
@@ -934,7 +1001,7 @@ function init(){
     return;
   }
   measure();
-  ['rlchart','dailychart'].forEach(id=>{ const el = byId(id); if(el) bind(el); });
+  ['rlchart','dailychart','latchart'].forEach(id=>{ const el = byId(id); if(el) bind(el); });
   addEventListener('wheel', e=>{                 // after the charts: whoever this one went to
     WHEEL.at = e.timeStamp || Date.now();
     if(!e.defaultPrevented) WHEEL.mode = 'page';
@@ -1861,6 +1928,40 @@ const N3 = (()=>{
     return {solid: G.v, glass, words: W, box: bx, hits, plot: {w: PW, h: H, z: 0}};
   }
 
+  /** Chart 3: response time -- a lit tube for the median, a dashed one for the p90, over the
+   *  same stone and dates as the daily skyline, with one hover target a day. */
+  function lines(rec, info, cx){
+    const G = Geo(), W = [], hits = [], PW = info.pw || N3PW;
+    const [px, py, pw, ph] = rec.plot, H = DAY_H, zb = -.6;
+    const at = p => [(p[0] - px)/pw, (py + ph - p[1])/ph];
+    const lg = legendLines(info.legend || [], 0, PW + .9, cx.measure);
+    let bx = stone(G, cx, -2.1, PW + 1.2, -1.2, 1.2, lg.rows);
+    legendOn(G, W, cx, lg, 1.2);
+    for(const f of [0, .5, 1]){
+      if(f) box(G, 0, f*H - .012, zb - .015, PW, f*H + .012, zb + .015, cx.col('--line'), -1, .5);
+      if(info.ylab) W.push(word(info.ylab(f), .3, -.3, Math.max(.08, f*H - .1), zb, {al: 'r', c: '--dim'}));
+    }
+    for(const m of rec.list){
+      if(m.t !== 'line') continue;
+      const pts = clipX(m.pts.map(at));
+      if(pts.length < 2) continue;
+      const P = pts.map(p => [p[0]*PW, p[1]*H, 0]);
+      if(!m.dash) tube(G, P, .05, cx.col(m.c), -1, .85);
+      else for(const run of dashes(P, .2, .12)) tube(G, run, .035, cx.col(m.c), -1, .6);
+    }
+    const v = info.view;
+    for(const [a, b] of info.days || []){
+      if(!v) break;
+      const u0 = Math.max(0, (a - v[0])/(v[1] - v[0])), u1 = Math.min(1, (b - v[0])/(v[1] - v[0]));
+      if(u1 - u0 < 1e-5) continue;
+      hits.push({id: hits.length, day: a, box: [u0*PW, 0, -.6, u1*PW, H, .6]});
+    }
+    title(W, info.title, -1, H + HEAD_Y, 0);
+    ticksOn(W, info.tk, info.view, 1.2, cx.measure, PW);
+    bx = union(union(bx, [-2.1, 0, -1.2, PW + 1.2, H + (info.title ? HEAD_Y + .5 : TIP_Y + 1), 1.2]), extent(W, cx.measure));
+    return {solid: G.v, glass: [], words: W, box: bx, hits, plot: {w: PW, h: H, z: 0}};
+  }
+
   /** Chart 2: a skyline -- one block a model a day, stacked, with a sliver of night between. */
   function daily(rec, info, cx){
     const G = Geo(), W = [], hits = [], PW = info.pw || N3PW;
@@ -2109,7 +2210,7 @@ const N3 = (()=>{
   }
 
   return {mul, persp, look, pose, inv, xf, ndc, corners, centre, VS,
-          windows, daily, medal, ledger, empty, coin, plotWidth, wrap, fore, slots, skyPose, tween, camera, horizon,
+          windows, daily, lines, medal, ledger, empty, coin, plotWidth, wrap, fore, slots, skyPose, tween, camera, horizon,
           fovFor, rayBox, local, onPlane, sliceAt, clipX, dashes, PW, WIN_H, DAY_H, CAM, FLOAT, FORE_TOP,
           TIP_Y};
 })();
@@ -2443,11 +2544,13 @@ void main(){
   const TITLES = {
     windows: '',                                       // the time charts need no heading
     daily: '',
+    latency: '',
     content: 'What filled the window',
     models: TK ? 'Input by model' : 'Recorded input by model',
   };
   const NAMES = {ledger: 'The numbers', windows: 'Weekly limit windows', daily: 'Daily input',
-                 content: 'What filled the window', models: 'Input by model'};
+                 latency: 'Response time', content: 'What filled the window',
+                 models: 'Input by model'};
   function exhibits(){
     EX.length = 0;
     const panels = document.querySelectorAll('.wrap > .panel');
@@ -2458,6 +2561,7 @@ void main(){
     add('ledger', null, null);
     add('windows', byId('rlchart'), panels[0] || null);
     add('daily', byId('dailychart'), byId('dailychart') && byId('dailychart').closest('.panel'));
+    if(byId('latchart')) add('latency', byId('latchart'), byId('latchart').closest('.panel'));
     if(byId('catpie')) add('content', byId('catpie'), null);
     if(byId('modelpie')) add('models', byId('modelpie'), null);
   }
@@ -2496,12 +2600,19 @@ void main(){
       m = rec ? N3.windows(rec, {vmax: VMAX, wins: WINS, tk, view: VIEW, pw, title: TITLES.windows}, cx)
               : N3.empty(text((ex.panel || document).querySelector('.sub')) || 'No weekly-limit snapshots in range.',
                          {title: TITLES.windows, pw}, cx);
+    } else if(ex.key === 'latency'){
+      m = rec ? N3.lines(rec, {tk, view: VIEW, pw, title: TITLES.latency,
+                               ylab: f => f ? secs(LMAX*f) : '0',
+                               days: LDAYS.map(r => [r[0], r[1]]),
+                               legend: Array.from((ex.panel || ex.host).querySelectorAll('.legend span'), s => ({
+                                 s: text(s), c: swatch(s)}))}, cx)
+              : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES.latency, pw}, cx);
     } else if(ex.key === 'daily'){
       const svg = ex.host && ex.host.querySelector('svg');
-      m = rec ? N3.daily(rec, {peak: text(svg && svg.querySelector('.peak')), tk, view: VIEW, pw, title: TITLES.daily,
+      m = rec ? N3.daily(rec, {peak: text(svg && svg.querySelector('.peak')), tk, view: VIEW, pw, title: TITLES[ex.key],
                                legend: Array.from(ex.host.querySelectorAll('.legend span'), s => ({
                                  s: text(s), c: swatch(s)}))}, cx)
-              : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES.daily, pw}, cx);
+              : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES[ex.key], pw}, cx);
     } else {
       m = N3.medal(rec, {legend: legendOf(ex.host), hot: ex.hot, title: TITLES[ex.key]}, cx);
     }
@@ -2925,6 +3036,15 @@ void main(){
       return [at(`window opened ${t0 == null ? '--' : when(t0)}  ·  peak reported ${w.peak_pct == null ? '--' : w.peak_pct + '%'}`, 0, '--fg'),
               at(`${winInput(w)} over ${w.tokens.responses.toLocaleString()} responses  ·  uncached ${big(w.tokens.uncached)}`, 1, '--dim')];
     }
+    if(ex.key === 'latency'){
+      const r = LDAYS.find(q => q[0] === hit.day);
+      if(!r) return null;
+      return latOk(r, 3)
+        ? [at(`${day(hit.day)}  ·  median ${secs(r[3])}  ·  p90 ${secs(r[4])}`, 0, '--fg'),
+           at(`${r[2].toLocaleString()} timed responses`, 1, '--dim')]
+        : [at(`${day(hit.day)}  ·  ${r[2].toLocaleString()} timed responses`, 0, '--fg'),
+           at('too few to show', 1, '--dim')];
+    }
     const row = (D.models.days || []).find(r => r[0] === hit.day);
     if(!row) return null;
     const tot = Object.values(row[2]).reduce((a, b) => a + b, 0);
@@ -3180,10 +3300,11 @@ DAILY_MODELS = 8        # models stacked in their own colour; the rest fold into
 def _domain(model):
     """The time span every chart on the page is drawn over, in unix seconds.
 
-    One domain for all three charts: the limit chart and the daily chart then place a moment
-    at the same x and can be read against each other, and the composition pie has a range to
-    be recomposed over.  It covers the limit series, the daily buckets and the content
-    buckets, so nothing the page can draw falls outside it.
+    One domain for every chart: the limit chart, the daily chart and the response-time chart
+    then place a moment at the same x and can be read against each other, and the
+    composition pie has a range to be recomposed over.  It covers the limit series, the daily
+    buckets, the response-time days and the content buckets, so nothing the page can draw
+    falls outside it.
     """
     lo = hi = None
 
@@ -3205,6 +3326,8 @@ def _domain(model):
             for p in (w.get('pct_points') or []):
                 seen(p[0])
     for d in (model.get('daily') or []):
+        seen(d.get('start'), d.get('end'))
+    for d in ((model.get('latency') or {}).get('daily') or []):
         seen(d.get('start'), d.get('end'))
     bucket = model.get('cat_bucket_s') or 3600
     for row in (model.get('cat_series') or []):
@@ -3424,142 +3547,16 @@ def secs(x):
     return f'{h}h {m:02d}m'
 
 
-LAT_GROUPS = 12         # model and effort rows in the latency table; the rest are in --json
-LAT_TOOLS = 10
-HOUR_MIN = 5            # an hour with fewer responses is left empty rather than drawn tall
-def _hours_chart(hours, above):
-    """Median per local hour of the day, one column each: time above the pace when `above`,
-    else the response time itself (no model had enough responses for a line).
-
-    Columns in CSS rather than an SVG: a fixed viewBox scales its labels down with the
-    panel, and on a phone they shrink to a few pixels.  These keep their size at any width.
-    """
-    key = 'median_above_s' if above else 'median_s'
-    by = {h['hour']: h for h in hours}
-    vals = [by[h][key] for h in by if by[h]['n'] >= HOUR_MIN and by[h][key] is not None]
-    top = max(vals) if vals else 0
-    # A clean round ceiling for the one gridline the chart keeps, and a short label for it.
-    ceil_v, ceil_label = top, secs(top)
-    for c, lab in ((1, '1s'), (2, '2s'), (5, '5s'), (10, '10s'), (15, '15s'), (30, '30s'),
-                   (60, '1m'), (120, '2m'), (300, '5m'), (600, '10m'), (1800, '30m'),
-                   (3600, '1h')):
-        if top <= c:
-            ceil_v, ceil_label = c, lab
-            break
-    what = 'time above the pace' if above else 'response time'
-    cols, xs = [], []
-    for hr in range(24):
-        h = by.get(hr)
-        n = h['n'] if h else 0
-        v = h[key] if h else None
-        tip = f'{hr:02d}:00\u2013{(hr + 1) % 24:02d}:00 \u00b7 {n:,} responses'
-        bar = ''
-        if n >= HOUR_MIN and v is not None and ceil_v > 0:
-            tip += f' \u00b7 median {what} {secs(v)}'
-            bar = f'<i style="height:{100 * v / ceil_v:.1f}%"></i>'
-        elif n >= HOUR_MIN:
-            tip += ' \u00b7 no estimate for these models'
-        elif n:
-            tip += ' \u00b7 too few to show'
-        cols.append(f'<div class="hrs-col" title="{esc(tip)}">{bar}</div>')
-        xs.append(f'<span>{hr:02d}</span>' if hr % 3 == 0 else '<span></span>')
-    return (f'<div class="hrs" role="img" aria-label="Median {what} by hour of the day">'
-            f'<div class="hrs-y"><span>{ceil_label if ceil_v else ""}</span><span>0</span></div>'
-            f'<div class="hrs-plot">{"".join(cols)}</div>'
-            f'<div class="hrs-x">{"".join(xs)}</div></div>')
-
-
-def _latency_panel(lat, public=False):
-    """Response time: the headline, the model and effort table, the hour of day, turns and
-    tools.  The split into work and time above the pace is an estimate, and every place it
-    appears is marked as one."""
-    if not lat.get('available'):
-        return (f'<div class="panel lat"><div class="ph">Response time</div>'
-                f'<p class="sub">Not timed &mdash; {esc(lat.get("reason") or "no data")}.</p></div>')
-    r = lat['responses']
-    share = r.get('above_share')
-    head = (f'<p class="lat-sum"><b>{secs(r["median_s"])}</b> median &middot; '
-            f'<b>{secs(r["p90_s"])}</b> p90 &middot; {r["n"]:,} responses')
-    if share is not None:
-        head += f' &middot; an estimated <b>{pct(share, 0)}</b> of it above the fastest pace*'
-        # The estimate covers only models with enough responses for a line; say so when
-        # that is not all of them.
-        cov = r.get('fitted_share')
-        if cov is not None and cov < 0.995:
-            head += f' (of the {pct(cov, 0)} of response time in models with enough responses)'
-    head += '</p>'
-
-    rows = []
-    for g in lat['groups'][:LAT_GROUPS]:
-        f = g.get('fit')
-        tps = '&mdash;' if not f or f['output_tps'] is None else f"{f['output_tps']:,.0f}"
-        rows.append(
-            f'<tr><td>{esc(g["model"])}</td><td>{esc(g["effort"])}</td>'
-            f'<td class="num">{g["n"]:,}</td><td class="num">{secs(g["median_s"])}</td>'
-            f'<td class="num">{secs(g["p90_s"])}</td>'
-            + (f'<td class="num">{secs(f["overhead_s"])}</td>'
-               f'<td class="num">{tps}</td>'
-               f'<td class="num">{pct(g.get("above_share"), 0)}</td>' if f else
-               '<td class="num dim" colspan="3">too few responses to estimate</td>')
-            + '</tr>')
-    more = len(lat['groups']) - LAT_GROUPS
-    table = ('<div class="tbl"><table><thead><tr><th>Model</th><th>Effort</th>'
-             '<th class="num">Responses</th><th class="num">Median</th><th class="num">p90</th>'
-             '<th class="num">Fixed overhead*</th><th class="num">Output tokens/s*</th>'
-             '<th class="num">Above pace*</th></tr></thead><tbody>'
-             + ''.join(rows) + '</tbody></table></div>'
-             + (f'<p class="sub">{more} more in the --json output.</p>' if more > 0 else ''))
-
-    above = any(g.get('fit') for g in lat['groups'])
-    hours = (f'<div class="ph2">Median {"time above the pace*" if above else "response time"}, '
-             f'by hour of the day</div>{_hours_chart(lat.get("hours") or [], above)}')
-
-    t = lat.get('turns') or {}
-    turns = ''
-    if t.get('n'):
-        turns = (f'<p class="lat-turns">Turns, from your message to the last response: '
-                 f'<b>{secs(t["median_s"])}</b> median, <b>{secs(t["p90_s"])}</b> p90 over '
-                 f'{t["n"]:,} turns.')
-        if t.get('model_share') is not None:
-            turns += (f' The model responding is {pct(t["model_share"], 0)} of turn time; the '
-                      f'rest is tools, approvals and Codex between calls.')
-        turns += '</p>'
-
-    tools = ''
-    # Tool names come from the machine (MCP servers among them), so the public page has none.
-    if lat.get('tools') and not public:
-        trs = ''.join(
-            f'<tr><td>{esc(x["tool"])}</td><td class="num">{x["n"]:,}</td>'
-            f'<td class="num">{secs(x["median_s"])}</td><td class="num">{secs(x["p90_s"])}</td>'
-            f'<td class="num">{secs(x["total_s"])}</td></tr>'
-            for x in lat['tools'][:LAT_TOOLS])
-        tools = ('<div class="ph2">Tools, from the call to its output</div>'
-                 '<div class="tbl"><table><thead><tr><th>Tool</th><th class="num">Calls</th>'
-                 '<th class="num">Median</th><th class="num">p90</th><th class="num">Total</th>'
-                 f'</tr></thead><tbody>{trs}</tbody></table></div>'
-                 '<p class="sub">Includes any wait for your approval. Calls that ran side by '
-                 'side each count their full time.</p>')
-
-    note = ('<p class="sub">Response time runs from the moment the prompt was complete '
-            '&mdash; your message or the last tool output &mdash; to the moment Codex recorded '
-            'the response: network, the server&rsquo;s queue, reading the prompt and writing '
-            'the answer, and any retry, together. * Estimated: for each model and effort, a '
-            'line is fitted under the fastest tenth of responses, a fixed overhead plus a time '
-            'per output token and per uncached input token. Time above that line is mostly '
-            'queueing and retries, but slow generation and ordinary variation land there too. '
-            'Codex does not record server timings, so this is not a measured queue time.</p>')
-    return (f'<div class="panel lat"><div class="ph">Response time</div>{head}{table}'
-            f'{hours}{turns}{tools}{note}</div>')
-
-
+HOUR_MIN = 5            # a day with fewer timed responses is left empty, not drawn tall
+LAT_H = 190             # the response-time chart's height, in the same units as RL_H
 def render(model, public=False, style=None):
-    """The page: the headline numbers, three charts over one shared, zoomable range, and a
-    response-time panel below them.
+    """The page: the headline numbers, three time charts over one shared, zoomable range
+    (limit windows, daily input, response time by day), and the composition pies.
 
     Everything else the model carries -- sessions, reconciliation, images, the window table,
     the data-quality counters and the disclosures that went with them -- is reported through
-    `--json` and the stdout summary, not here.  The response-time panel has no time axis of
-    its own, so it stands outside the shared viewport.
+    `--json` and the stdout summary, not here -- the per-model response times and pace
+    estimates, the hour of day, turns and tools among them.
 
     `public` is the page token-share publishes: the same page, less the two strings on it
     that come from the machine rather than from counting -- the top session's id and the
@@ -3603,6 +3600,25 @@ def render(model, public=False, style=None):
                                                        (str(top['session_id'])[:8], where) if x)
         top_tile = [tile('Longest session', big(top[shown]), top_note)]
 
+    # The third time chart: response time by day, on the same axis as the other two.  When
+    # nothing was timed its place says why, as the limit chart's does.
+    lat_m = model.get('latency') or {}
+    lat_days = [d for d in (lat_m.get('daily') or [])
+                if d.get('start') is not None and d.get('end') is not None]
+    if not lat_m.get('available'):
+        lat_inner = (f'<p class="sub">Response time not available &mdash; '
+                     f'{esc(lat_m.get("reason") or "nothing was timed")}.</p>')
+    elif not lat_days:
+        lat_inner = '<p class="sub">No timed responses on a dated day in range.</p>'
+    else:
+        lat_inner = ''                            # drawn by the page (drawLat)
+    lat_chart = (f'<div class="panel"><div class="chart" id="latchart">{lat_inner}</div>'
+                 + ('<div class="legend">'
+                    '<span><i style="background:var(--uncached)"></i>median response time</span>'
+                    '<span><i style="background:var(--dim)"></i>p90</span></div>'
+                    if lat_days else '')
+                 + '</div>\n')
+
     # A tile, not only the panel: the tiles are what every style draws, the 3D one included.
     lat = model.get('latency') or {}
     lat_r = lat.get('responses') or {}
@@ -3642,7 +3658,7 @@ def render(model, public=False, style=None):
     # page's JS; the deep-dive data it used to carry went out with the section that drew it.
     payload = _script_json({
         'geo': {'w': CHART_W, 'l': CHART_L, 'r': CHART_R,
-                'rl_h': RL_H, 'rl_t': RL_T, 'rl_b': RL_B},
+                'rl_h': RL_H, 'rl_t': RL_T, 'rl_b': RL_B, 'lat_h': LAT_H},
         'domain': domain,
         'styles': STYLES,
         'gl_styles': GL_STYLES,
@@ -3665,6 +3681,11 @@ def render(model, public=False, style=None):
         # Which input the charts draw: 'tiktoken' or 'recorded' (Codex's).  Labels follow it.
         'input_source': t.get('input_source') or 'recorded',
         # The daily chart's own ranking and cap, so the model pie colours match its bars.
+        # The response-time chart's days, [start, end, timed responses, median, p90], and
+        # how many responses a day needs before it is drawn.
+        'latency': {'days': [[d['start'], d['end'], d['n'], d.get('median_s'), d.get('p90_s')]
+                             for d in lat_days],
+                    'min': HOUR_MIN},
         'models': {
             'order': [m['model'] for m in model['models'] if m['model']][:DAILY_MODELS],
             'days': [[d['start'], d['end'], d.get('tiktoken_models' if tk else 'models') or {}]
@@ -3705,9 +3726,9 @@ def render(model, public=False, style=None):
     model['daily'], [m['model'] for m in model['models']], domain or [0, 1],
     tiktoken=tk)}</div></div>
 
+{lat_chart}
 <div class="panel pies"><div id="catpie"></div><div id="modelpie"></div></div>
 
-{_latency_panel(lat, public=public)}
 
 </div>
 <script>window.__TC__ = {payload};</script>

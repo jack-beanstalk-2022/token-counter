@@ -97,9 +97,8 @@ The last line a share prints is your report, `https://tokenusage.dev/r/<handle>`
 page as your local report, in the same three styles, for anyone you send the link to. It is
 rendered with token-report's `--public`, which leaves out the top session's id and directory
 name; the dry run writes it to `~/.codex/token-counter/report-shared.html` so you can open
-exactly what will be published. Its response-time panel goes too -- response times by
-model, by hour of the day and per turn -- without the tool names. `--no-report` shares the
-numbers without it.
+exactly what will be published. Its response-time chart goes too: the median and p90
+response time per day. `--no-report` shares the numbers without it.
 
 What is sent is Codex's own recorded counts, from the same ledger the report reads, so the
 leaderboard agrees day for day with the report's recorded figures (in `--json` and on its
@@ -132,16 +131,19 @@ time the limit resets. Those resets are not on a seven-day grid — a window rea
 replaced, inside a single rollout file a minute later, by a fresh one resetting seven days
 from *that* instant — so boundaries are taken from where the reported percentage drops.
 
-The limit chart and the daily chart are drawn on **one time axis**, and scrolling, dragging
-or pinching either one zooms and pans both — horizontally only, so heights stay comparable —
-while the composition chart recomposes over whatever range is on screen. On a phone too.
+The limit chart, the daily chart and the response-time chart are drawn on **one time
+axis**, and scrolling, dragging or pinching any one zooms and pans all three — horizontally
+only, so heights stay comparable — while the composition chart recomposes over whatever
+range is on screen. On a phone too.
 
 It times the work, too: **how long each response took**, from the moment its prompt was
 complete — your message or the last tool output — to the moment Codex recorded it, per model
 and reasoning effort, with turn time and time per tool beside it. How much of that was
 waiting in a queue cannot be read from the logs, which hold no server timing, so the report
 estimates it and says so: per model it fits the pace of the fastest tenth of responses for
-their size, and shows how much time sat above that pace, overall and by hour of the day.
+their size, and reports how much time sat above that pace in `--json` and on its terminal
+line. The page charts only measured times: the median and p90 response time by day. The
+per-model, hourly, turn and tool breakdowns are in `--json`.
 
 It also refuses to overclaim. Cache *causation* is not recoverable from rollout logs, so
 divergence between prompt-prefix stability and reported caching is presented as a ranked list
@@ -158,7 +160,7 @@ corpus shows 95% of a window costing 2.81B recorded input one week and 790M anot
 | Output, cache hit, cached and uncached input | Codex's own usage records |
 | Weekly limit used, reset times, the limit's % line | Codex's rate-limit snapshots, as the server reported them |
 | Response time, turn time, tool time | the records' own timestamps |
-| Fixed overhead, output tokens/s, time above the pace (starred) | **an estimate**, fitted to those times; not a measured queue time |
+| Time above the fastest pace (`--json`, terminal line) | **an estimate**, fitted to those times; not a measured queue time |
 
 Input is counted because its content is in the log. Output and caching are not: reasoning
 tokens are encrypted (only summaries are readable), and what is cached is decided on the
@@ -220,7 +222,7 @@ machine you are on.
 ```
 python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock o200k_base
 python scripts/test_ledger.py            # 13 response-identity regressions
-python scripts/test_pipeline.py          # 231 pipeline assertions
+python scripts/test_pipeline.py          # 237 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
 python scripts/test_share.py             # the share payload, its privacy and its transport
 python scripts/bench.py                  # the parallelism grid
