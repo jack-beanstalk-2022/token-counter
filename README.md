@@ -98,7 +98,8 @@ page as your local report, in the same three styles, for anyone you send the lin
 rendered with token-report's `--public`, which leaves out the top session's id and directory
 name; the dry run writes it to `~/.codex/token-counter/report-shared.html` so you can open
 exactly what will be published. Its response-time chart goes too: the median and p90
-response time per day. `--no-report` shares the numbers without it.
+response time per day, and the rate-limit events per day behind them. `--no-report` shares
+the numbers without it.
 
 What is sent is Codex's own recorded counts, from the same ledger the report reads, so the
 leaderboard agrees day for day with the report's recorded figures (in `--json` and on its
@@ -145,6 +146,11 @@ their size, and reports how much time sat above that pace in `--json` and on its
 line. The page charts only measured times: the median and p90 response time by day. The
 per-model, hourly, turn and tool breakdowns are in `--json`.
 
+Behind those two lines, on an axis of its own, a bar a day counts the **rate-limit events**
+Codex logged: snapshots in which the server reported a limit as reached. A day the limit
+blocked outright has bars and no line. A forked session replays its parent's log, so the
+parent's events copied into it are left out rather than counted twice.
+
 It also refuses to overclaim. Cache *causation* is not recoverable from rollout logs, so
 divergence between prompt-prefix stability and reported caching is presented as a ranked list
 of leads, visibly marked as inference, not as findings. The same restraint applies to the
@@ -159,6 +165,7 @@ corpus shows 95% of a window costing 2.81B recorded input one week and 790M anot
 | Content composition | **tiktoken** |
 | Output, cache hit, cached and uncached input | Codex's own usage records |
 | Weekly limit used, reset times, the limit's % line | Codex's rate-limit snapshots, as the server reported them |
+| Rate-limit events per day | the same snapshots: those in which the server reported a limit as reached |
 | Response time, turn time, tool time | the records' own timestamps |
 | Time above the fastest pace (`--json`, terminal line) | **an estimate**, fitted to those times; not a measured queue time |
 
@@ -222,7 +229,7 @@ machine you are on.
 ```
 python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock o200k_base
 python scripts/test_ledger.py            # 13 response-identity regressions
-python scripts/test_pipeline.py          # 237 pipeline assertions
+python scripts/test_pipeline.py          # 253 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
 python scripts/test_share.py             # the share payload, its privacy and its transport
 python scripts/bench.py                  # the parallelism grid

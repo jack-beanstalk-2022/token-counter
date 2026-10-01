@@ -539,8 +539,12 @@ function drawDaily(tk){
 // the value axis is fixed over the corpus.  A day with fewer than LAT_MIN timed responses is
 // not a point (one slow response is not a slow day) and breaks the line, as a day with none
 // does; it keeps a hover target that says so.
+// Behind the lines, on an axis of their own at the right, a bar a day counts the rate-limit
+// events Codex logged: snapshots in which a limit was reached.  A day the limit blocked
+// outright has events and no timed response, so the bars keep their own list of days.
 const LATD = D.latency || {};
 const LDAYS = LATD.days || [];                // [start, end, timed responses, median, p90]
+const LEV = LATD.events || [];                // [start, end, rate-limit events]
 const LAT_MIN = LATD.min || 5;
 const latOk = (r, k) => r[2] >= LAT_MIN && r[k] != null;
 let LMAX = 0;
@@ -549,6 +553,17 @@ const LSHOWN = LMAX > 0;
 // A clean ceiling, so the axis reads 0 / 45s / 1m 30s rather than 0 / 34s / 1m 09s.
 LMAX = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 600, 900, 1200, 1800, 2700, 3600]
   .find(c => c >= LMAX) || LMAX || 1;
+// The event axis's ceiling, even, so its middle guide reads a whole number of events.
+let EMAX = 0;
+LEV.forEach(r => { EMAX = Math.max(EMAX, r[2]); });
+EMAX = [2, 4, 6, 8, 10, 12, 16, 20, 24, 30, 40, 50, 60, 80, 100, 120, 160, 200, 300, 400, 500, 600, 800, 1000]
+  .find(c => c >= EMAX) || Math.ceil(EMAX/2)*2;
+/** Every day the chart says something about, [start, end]: timed responses, events, or both. */
+const LSPANS = [...new Map([...LDAYS, ...LEV].map(r => [r[0], [r[0], r[1]]])).values()]
+  .sort((p, q) => p[0] - q[0]);
+const LROW = new Map(LDAYS.map(r => [r[0], r]));
+const LEVN = new Map(LEV.map(r => [r[0], r[2]]));
+const evWord = n => `${n.toLocaleString()} rate-limit event${n === 1 ? '' : 's'}`;
 /** The two series, as the page and the 3D scene both draw them. */
 const LSERIES = [{k: 3, c: '--uncached', w: 2, dash: null},
                  {k: 4, c: '--dim', w: 1.6, dash: [5, 3]}];
@@ -567,7 +582,7 @@ function latRuns(k){
 function drawLat(tk){
   const host = byId('latchart');
   if(!host) return;
-  if(!LSHOWN){
+  if(!LSHOWN && !LEV.length){
     // Nothing timed at all: the server's own sentence says why, and stays.
     if(LDAYS.length) host.innerHTML = `<p class="sub">No day in range has ${LAT_MIN} or more `+
                                       `timed responses, so none is drawn.</p>`;
@@ -576,19 +591,30 @@ function drawLat(tk){
   }
   const H = G.lat_h || 190, T = 18, B = 34;
   const y = v => H-B - (v/LMAX)*(H-B-T);
+  const ye = v => H-B - (v/EMAX)*(H-B-T);
   let s = `<svg viewBox="0 0 ${W} ${H}" data-h="${H}" data-t="${T}" data-b="${B}" role="img" `+
-          `aria-label="median and p90 response time by day">`;
+          `aria-label="median and p90 response time${LEV.length ? ', and rate-limit events,' : ''} by day">`;
   s += `<defs><clipPath id="tcclip-lat"><rect x="${L}" y="0" width="${PLOT}" height="${H}"/>`+
        `</clipPath></defs>`;
   [0, .5, 1].forEach(f=>{
     const yy = y(LMAX*f);
     s += `<line x1="${L}" y1="${yy.toFixed(1)}" x2="${W-RM}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
-    s += `<text x="${L-8}" y="${(yy+4).toFixed(1)}" text-anchor="end" fill="var(--dim)" font-size="11">${f ? esc(secs(LMAX*f)) : '0'}</text>`;
+    if(LSHOWN) s += `<text x="${L-8}" y="${(yy+4).toFixed(1)}" text-anchor="end" fill="var(--dim)" font-size="11">${f ? esc(secs(LMAX*f)) : '0'}</text>`;
+    if(LEV.length) s += `<text x="${W-RM+8}" y="${(yy+4).toFixed(1)}" fill="var(--warn)" font-size="11">${EMAX*f}</text>`;
   });
   s += axis(H, T, B, tk);
   s += `<g clip-path="url(#tcclip-lat)">`;
   const mk = [];
   const mid = r => (r[0] + r[1])/2;
+  // The bars first, so both lines are drawn over them.
+  for(const r of LEV){
+    const x0 = X(r[0]), x1 = X(r[1]), bw = .6*(x1 - x0), bx = x0 + .2*(x1 - x0);
+    if(x1 < L || x0 > W-RM) continue;
+    const yy = ye(r[2]);
+    s += `<rect x="${bx.toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}" height="${(H-B-yy).toFixed(1)}" `+
+         `fill="var(--warn)" fill-opacity=".5" class="mk"/>`;
+    mk.push({t:'rect', x: bx, y: yy, w: bw, h: H-B-yy, c: '--warn', a: .5, day: r[0]});
+  }
   for(const se of LSERIES){
     for(const run of latRuns(se.k)){
       const pts = run.map(r => [X(mid(r)), y(r[se.k])]);
@@ -603,11 +629,14 @@ function drawLat(tk){
         s += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${se.dash ? 2.5 : 3}" fill="var(${se.c})"/>`;
     }
   }
-  for(const r of LDAYS){
-    const x0 = X(r[0]), x1 = X(r[1]);
+  for(const [a, b] of LSPANS){
+    const x0 = X(a), x1 = X(b);
     if(x1 < L || x0 > W-RM) continue;
-    const tip = `${day(r[0])}\n${r[2].toLocaleString()} timed responses` +
-                (latOk(r, 3) ? `\nmedian ${secs(r[3])}, p90 ${secs(r[4])}` : `\ntoo few to show`);
+    const r = LROW.get(a), n = LEVN.get(a);
+    const tip = day(a) +
+                (r ? `\n${r[2].toLocaleString()} timed responses` +
+                     (latOk(r, 3) ? `\nmedian ${secs(r[3])}, p90 ${secs(r[4])}` : `\ntoo few to show`) : '') +
+                (n ? `\n${evWord(n)}` : '');
     s += `<rect x="${x0.toFixed(1)}" y="${T}" width="${Math.max(0, x1-x0).toFixed(1)}" height="${H-T-B}" `+
          `fill="transparent"><title>${esc(tip)}</title></rect>`;
   }
@@ -1118,7 +1147,7 @@ const GLX = (()=>{
   }
   function geo(V, m){
     if(m.t === 'rect'){
-      const c = rgba(m.c);
+      const c = rgba(m.c, m.a);
       tri(V, m.x, m.y, m.x+m.w, m.y, m.x+m.w, m.y+m.h, c);
       tri(V, m.x, m.y, m.x+m.w, m.y+m.h, m.x, m.y+m.h, c);
     } else if(m.t === 'area'){
@@ -1929,7 +1958,8 @@ const N3 = (()=>{
   }
 
   /** Chart 3: response time -- a lit tube for the median, a dashed one for the p90, over the
-   *  same stone and dates as the daily skyline, with one hover target a day. */
+   *  same stone and dates as the daily skyline, with one hover target a day.  The rate-limit
+   *  events stand behind the tubes as slabs, read on their own scale at the right. */
   function lines(rec, info, cx){
     const G = Geo(), W = [], hits = [], PW = info.pw || N3PW;
     const [px, py, pw, ph] = rec.plot, H = DAY_H, zb = -.6;
@@ -1940,6 +1970,13 @@ const N3 = (()=>{
     for(const f of [0, .5, 1]){
       if(f) box(G, 0, f*H - .012, zb - .015, PW, f*H + .012, zb + .015, cx.col('--line'), -1, .5);
       if(info.ylab) W.push(word(info.ylab(f), .3, -.3, Math.max(.08, f*H - .1), zb, {al: 'r', c: '--dim'}));
+      if(info.yrlab) W.push(word(info.yrlab(f), .3, PW + .2, Math.max(.08, f*H - .1), zb, {c: '--warn'}));
+    }
+    for(const m of rec.list){
+      if(m.t !== 'rect') continue;
+      const u0 = Math.max(0, (m.x - px)/pw), u1 = Math.min(1, (m.x + m.w - px)/pw);
+      if(u1 - u0 < 1e-5) continue;
+      box(G, u0*PW, 0, -.35, u1*PW, (py + ph - m.y)/ph*H, -.12, cx.col(m.c));
     }
     for(const m of rec.list){
       if(m.t !== 'line') continue;
@@ -2602,8 +2639,9 @@ void main(){
                          {title: TITLES.windows, pw}, cx);
     } else if(ex.key === 'latency'){
       m = rec ? N3.lines(rec, {tk, view: VIEW, pw, title: TITLES.latency,
-                               ylab: f => f ? secs(LMAX*f) : '0',
-                               days: LDAYS.map(r => [r[0], r[1]]),
+                               ylab: LSHOWN ? (f => f ? secs(LMAX*f) : '0') : null,
+                               yrlab: LEV.length ? (f => String(EMAX*f)) : null,
+                               days: LSPANS,
                                legend: Array.from((ex.panel || ex.host).querySelectorAll('.legend span'), s => ({
                                  s: text(s), c: swatch(s)}))}, cx)
               : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES.latency, pw}, cx);
@@ -3037,13 +3075,14 @@ void main(){
               at(`${winInput(w)} over ${w.tokens.responses.toLocaleString()} responses  ·  uncached ${big(w.tokens.uncached)}`, 1, '--dim')];
     }
     if(ex.key === 'latency'){
-      const r = LDAYS.find(q => q[0] === hit.day);
-      if(!r) return null;
+      const r = LROW.get(hit.day), n = LEVN.get(hit.day);
+      const ev = n ? `  ·  ${evWord(n)}` : '';
+      if(!r) return n ? [at(day(hit.day), 0, '--fg'), at(evWord(n), 1, '--warn')] : null;
       return latOk(r, 3)
         ? [at(`${day(hit.day)}  ·  median ${secs(r[3])}  ·  p90 ${secs(r[4])}`, 0, '--fg'),
-           at(`${r[2].toLocaleString()} timed responses`, 1, '--dim')]
+           at(`${r[2].toLocaleString()} timed responses${ev}`, 1, '--dim')]
         : [at(`${day(hit.day)}  ·  ${r[2].toLocaleString()} timed responses`, 0, '--fg'),
-           at('too few to show', 1, '--dim')];
+           at(`too few to show${ev}`, 1, '--dim')];
     }
     const row = (D.models.days || []).find(r => r[0] === hit.day);
     if(!row) return null;
@@ -3303,8 +3342,8 @@ def _domain(model):
     One domain for every chart: the limit chart, the daily chart and the response-time chart
     then place a moment at the same x and can be read against each other, and the
     composition pie has a range to be recomposed over.  It covers the limit series, the daily
-    buckets, the response-time days and the content buckets, so nothing the page can draw
-    falls outside it.
+    buckets, the response-time and rate-limit-event days and the content buckets, so nothing
+    the page can draw falls outside it.
     """
     lo = hi = None
 
@@ -3328,6 +3367,8 @@ def _domain(model):
     for d in (model.get('daily') or []):
         seen(d.get('start'), d.get('end'))
     for d in ((model.get('latency') or {}).get('daily') or []):
+        seen(d.get('start'), d.get('end'))
+    for d in ((model.get('limit_events') or {}).get('daily') or []):
         seen(d.get('start'), d.get('end'))
     bucket = model.get('cat_bucket_s') or 3600
     for row in (model.get('cat_series') or []):
@@ -3605,18 +3646,28 @@ def render(model, public=False, style=None):
     lat_m = model.get('latency') or {}
     lat_days = [d for d in (lat_m.get('daily') or [])
                 if d.get('start') is not None and d.get('end') is not None]
-    if not lat_m.get('available'):
-        lat_inner = (f'<p class="sub">Response time not available &mdash; '
-                     f'{esc(lat_m.get("reason") or "nothing was timed")}.</p>')
-    elif not lat_days:
-        lat_inner = '<p class="sub">No timed responses on a dated day in range.</p>'
-    else:
-        lat_inner = ''                            # drawn by the page (drawLat)
+    # Rate-limit events stand behind the lines as bars, on an axis of their own.  A day the
+    # limit blocked outright has events and no timed response, so they keep their own days,
+    # and they alone are enough for the page to draw the chart.
+    ev_days = [d for d in ((model.get('limit_events') or {}).get('daily') or [])
+               if d.get('n') and d.get('start') is not None and d.get('end') is not None]
+    lat_why = (f'Response time not available &mdash; '
+               f'{esc(lat_m.get("reason") or "nothing was timed")}' if not lat_m.get('available')
+               else 'No timed responses on a dated day in range')
+    lat_inner = '' if lat_days or ev_days else f'<p class="sub">{lat_why}.</p>'  # else drawLat
+    legend = []
+    if lat_days:
+        legend += ['<span><i style="background:var(--uncached)"></i>median response time</span>',
+                   '<span><i style="background:var(--dim)"></i>p90</span>']
+    elif ev_days:
+        legend.append(f'<span>{lat_why}</span>')
+    if ev_days:
+        legend.append('<span><i style="background:var(--warn)"></i>rate-limit events '
+                      '(right axis)</span>')
+    elif lat_days:
+        legend.append('<span>no rate-limit events logged</span>')
     lat_chart = (f'<div class="panel"><div class="chart" id="latchart">{lat_inner}</div>'
-                 + ('<div class="legend">'
-                    '<span><i style="background:var(--uncached)"></i>median response time</span>'
-                    '<span><i style="background:var(--dim)"></i>p90</span></div>'
-                    if lat_days else '')
+                 + (f'<div class="legend">{"".join(legend)}</div>' if legend else '')
                  + '</div>\n')
 
     # A tile, not only the panel: the tiles are what every style draws, the 3D one included.
@@ -3681,11 +3732,13 @@ def render(model, public=False, style=None):
         # Which input the charts draw: 'tiktoken' or 'recorded' (Codex's).  Labels follow it.
         'input_source': t.get('input_source') or 'recorded',
         # The daily chart's own ranking and cap, so the model pie colours match its bars.
-        # The response-time chart's days, [start, end, timed responses, median, p90], and
-        # how many responses a day needs before it is drawn.
+        # The response-time chart's days, [start, end, timed responses, median, p90], how
+        # many responses a day needs before it is drawn, and the rate-limit events drawn
+        # behind them, [start, end, events].
         'latency': {'days': [[d['start'], d['end'], d['n'], d.get('median_s'), d.get('p90_s')]
                              for d in lat_days],
-                    'min': HOUR_MIN},
+                    'min': HOUR_MIN,
+                    'events': [[d['start'], d['end'], d['n']] for d in ev_days]},
         'models': {
             'order': [m['model'] for m in model['models'] if m['model']][:DAILY_MODELS],
             'days': [[d['start'], d['end'], d.get('tiktoken_models' if tk else 'models') or {}]

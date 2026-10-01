@@ -486,6 +486,26 @@ def _sparse_column():
     return lambda: setattr(latency, 'FIT_DISTINCT', orig)
 
 
+@case("a fork child's replayed rate-limit events are counted as its own",
+      lambda: tp.test_limit_events())
+def _replayed_limit_events():
+    # A fork child replays its parent's snapshots stamped with its own creation time: every
+    # refusal the parent logged would be counted again, on the day the child was made.
+    orig = worker.OPENING_BURST_GAP_S
+    worker.OPENING_BURST_GAP_S = -1
+    return lambda: setattr(worker, 'OPENING_BURST_GAP_S', orig)
+
+
+@case("the opening burst runs on into the child's own work",
+      lambda: tp.test_limit_events())
+def _burst_too_long():
+    # A refusal needs a round trip, so it lands after the burst; a burst that swallows the
+    # child's first seconds takes its own refusal for the parent's.
+    orig = worker.OPENING_BURST_GAP_S
+    worker.OPENING_BURST_GAP_S = 10
+    return lambda: setattr(worker, 'OPENING_BURST_GAP_S', orig)
+
+
 def main():
     print(f'{len(CASES)} mutations\n')
     bad = 0

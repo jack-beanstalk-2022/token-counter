@@ -127,6 +127,7 @@ win_shapes = collections.Counter()
 win_lengths = collections.Counter()
 slot_by_length = collections.Counter()
 plans = collections.Counter()
+reached = collections.Counter()   # rate_limit_reached_type -> snapshots (the report's events)
 reset_absent = 0
 relative_reset = 0
 weekly_obs = []          # (t, used_percent, resets_at)
@@ -151,6 +152,7 @@ for f in files:
         rl_snapshots += 1
         rl_keys[tuple(sorted(rl.keys()))] += 1
         plans[rl.get('plan_type')] += 1
+        reached[rl.get('rate_limit_reached_type')] += 1
         t = _ep(o.get('timestamp'))
         for slot in ('primary', 'secondary'):
             w = rl.get(slot)
@@ -179,6 +181,9 @@ print(f"window key shapes: {dict(win_shapes)}")
 print(f"window lengths (minutes): {dict(win_lengths)}")
 print(f"which slot holds each length: {dict(slot_by_length)}")
 print(f"plan_type values: {dict(plans)}")
+# Every snapshot with this set is one rate-limit event on the report's response-time chart.
+print(f"rate_limit_reached_type values: {dict(reached)}  "
+      f"(set in {sum(n for k, n in reached.items() if k)} snapshots)")
 print(f"windows with neither resets_at nor resets_in_seconds: {reset_absent}")
 print(f"windows quoting a RELATIVE resets_in_seconds: {relative_reset}")
 

@@ -502,6 +502,11 @@ def main(argv=None):
                     line += (f" (of the {100 * cov:.0f}% of response time in models with "
                              f"enough responses)")
             print(line)
+        ev = model.get('limit_events') or {}
+        if ev.get('total'):
+            nd = len(ev.get('daily') or [])
+            print(f"rate-limit events {ev['total']:,} on {nd:,} day{'' if nd == 1 else 's'} "
+                  f"(snapshots in which Codex logged a limit as reached)")
         rl = model.get('rate_limits') or {}
         cur = rl.get('current')
         if acct.get('available') or cur:

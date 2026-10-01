@@ -167,14 +167,16 @@ check('the plot area is the same in both charts',
 // 2a. the response-time chart is the third chart on the same axis: two lines, a point a day
 const LD = run('LDAYS'), LMIN = run('LAT_MIN');
 const drawable = LD.filter(r => r[2] >= LMIN && r[3] != null);
-const lineMarks = () => (run('SCN').get(latHost) || { list: [] }).list;
+const latList = () => (run('SCN').get(latHost) || { list: [] }).list;
+const lineMarks = () => latList().filter(m => m.t === 'line');
+const evMarks = () => latList().filter(m => m.t === 'rect');
 /** Every point of every line sits at the middle of a drawable day, at the page's own X. */
 const onDays = () => lineMarks().every(m => m.pts.every(p =>
   drawable.some(r => Math.abs(p[0] - run(`X(${(r[0] + r[1]) / 2})`)) < 0.01)));
 check('the response-time chart is two lines: the median solid, the p90 dashed',
       lineMarks().some(m => m.t === 'line' && !m.dash && m.c === '--uncached')
       && lineMarks().some(m => m.t === 'line' && m.dash && m.c === '--dim')
-      && lineMarks().every(m => m.t === 'line'), JSON.stringify(lineMarks().map(m => [m.c, !!m.dash])));
+      && latList().every(m => m.t === 'line' || m.t === 'rect'), JSON.stringify(latList().map(m => [m.t, m.c, !!m.dash])));
 const d0 = drawable[0], bar0 = bars.find(b => +b.getAttribute('data-a') === d0[0]);
 check('a day\'s point sits over that day\'s bar in the daily chart',
       onDays() && !!bar0
@@ -193,6 +195,39 @@ check('a gap in the days breaks the line rather than bridging it',
       gapped && spans.length >= 1 && spans.every(dt => dt <= 1.5 * 86400)
       && (latHost.innerHTML.match(/<circle /g) || []).length === 2 * drawable.length,
       JSON.stringify(spans));
+// 2b. rate-limit events: a bar a day behind the lines, on an axis of its own at the right
+const LEV = run('LEV'), EMAX = run('EMAX'), LH = 190 - 18 - 34;
+/** Every event day on screen is one bar, centred on its day at the page's own X. */
+const evOnDays = () => {
+  const shown = LEV.filter(r => run(`X(${r[1]})`) >= L && run(`X(${r[0]})`) <= W - RM);
+  return shown.length > 0 && evMarks().length === shown.length && evMarks().every(m => {
+    const r = LEV.find(q => q[0] === m.day);
+    return !!r && Math.abs(m.x + m.w / 2 - run(`X(${(r[0] + r[1]) / 2})`)) < 0.01;
+  });
+};
+check('each day with rate-limit events is one bar, centred on its day',
+      LEV.length === 3 && evOnDays() && evMarks().every(m => m.c === '--warn'),
+      JSON.stringify(evMarks()));
+check('a bar is drawn before the lines, so the lines stay on top of it',
+      latHost.innerHTML.indexOf('fill-opacity=".5" class="mk"') < latHost.innerHTML.indexOf('<path'),
+      '');
+check('a bar is as tall as its count on the event axis, whose ceiling is even',
+      EMAX === 8 && evMarks().every(m => Math.abs(m.h - LEV.find(r => r[0] === m.day)[2] / EMAX * LH) < 0.01),
+      `EMAX=${EMAX} ${JSON.stringify(evMarks().map(m => m.h))}`);
+const evAxis = [...latHost.innerHTML.matchAll(/fill="var\(--warn\)" font-size="11">([^<]*)</g)].map(m => m[1]);
+check('the event axis is labelled at the right, in the limit colour, and the time axis keeps its own',
+      JSON.stringify(evAxis) === '["0","4","8"]'
+      && (latHost.innerHTML.match(/text-anchor="end" fill="var\(--dim\)"/g) || []).length === 3,
+      JSON.stringify(evAxis));
+const evW = new Map(evMarks().map(m => [m.day, m.w]));
+const blocked = LEV.find(r => !LD.some(q => q[0] === r[0]));
+check('a day with events and no timed response still gets its bar, and a hover target that says so',
+      !!blocked && evMarks().some(m => m.day === blocked[0])
+      && latHost.innerHTML.includes('7 rate-limit events</title>'), JSON.stringify(blocked));
+check('a day\'s hover target names its events beside its response time, one event in the singular',
+      latHost.innerHTML.includes('too few to show\n3 rate-limit events</title>')
+      && latHost.innerHTML.includes('1 rate-limit event</title>'), '');
+
 const lMarks = run('SCN').get(latHost);
 check('the response-time chart records its marks inside its own plot',
       !!lMarks && JSON.stringify(lMarks.plot) === JSON.stringify([L, 18, W - L - RM, 190 - 18 - 34]),
@@ -278,16 +313,22 @@ const verts = v => { const o = []; for (let i = 0; i < v.length; i += N3.VS) o.p
         blocks.every(q => q[0] >= -1e-9 && q[0] <= N3.PW + 1e-9 && q[1] >= 0), '');
 }
 {
-  // The scene's response-time exhibit is built from the page's own line marks.
+  // The scene's response-time exhibit is built from the page's own line and bar marks.
   const lm = run('SCN').get(latHost);
-  const v = run('VIEW');
-  const m = N3.lines(lm, { tk: [], view: v, pw: N3.PW, ylab: f => String(f),
-                           days: LD.map(r => [r[0], r[1]]), legend: [] }, cx3);
-  const inView = LD.filter(r => r[1] > v[0] && r[0] < v[1]).length;
-  check('the 3D scene builds the response-time lines, with one hover target a day',
-        m.solid.length > 0 && m.hits.length === inView
-        && m.hits.every(h => h.box[0] >= -1e-9 && h.box[3] <= N3.PW + 1e-9 && LD.some(r => r[0] === h.day)),
+  const v = run('VIEW'), spans = run('LSPANS');
+  const info = { tk: [], view: v, pw: N3.PW, ylab: f => String(f), yrlab: f => String(f),
+                 days: spans, legend: [] };
+  const m = N3.lines(lm, info, cx3);
+  const inView = spans.filter(r => r[1] > v[0] && r[0] < v[1]).length;
+  check('the 3D scene builds the response-time lines, with one hover target a day, events or not',
+        m.solid.length > 0 && m.hits.length === inView && inView === LD.length + 1
+        && m.hits.every(h => h.box[0] >= -1e-9 && h.box[3] <= N3.PW + 1e-9 && spans.some(r => r[0] === h.day)),
         `${m.hits.length} hits for ${inView} days`);
+  const bare = N3.lines(Object.assign({}, lm, { list: lm.list.filter(q => q.t !== 'rect') }), info, cx3);
+  check('and every event bar becomes one slab standing behind the lines',
+        (m.solid.length - bare.solid.length) / N3.VS === 30 * evMarks().length
+        && verts(m.solid).filter(q => q[2] > -.36 && q[2] < -.11).length >= 30 * evMarks().length,
+        `${(m.solid.length - bare.solid.length) / N3.VS} vertices for ${evMarks().length} bars`);
 }
 {
   const m = N3.medal(pMarks, { legend: { rows: [] }, hot: -1, title: 't' }, cx3);
@@ -362,6 +403,11 @@ check('the two charts still share ticks when zoomed',
 check('zooming moves the response-time chart with the other two',
       onDays() && JSON.stringify(ticksOf(latHost.innerHTML)) === JSON.stringify(t1z),
       JSON.stringify(lineMarks()[0] || null));
+run(`setSpan((DOM[1]-DOM[0])/2, ${(LEV[0][0] + LEV[0][1]) / 2}, L+PLOT/2)`); flush();
+check('zooming moves the event bars with their days, wider and no taller',
+      evOnDays() && evMarks().every(m => m.w > 1.5 * evW.get(m.day)
+                                         && Math.abs(m.h - LEV.find(r => r[0] === m.day)[2] / EMAX * LH) < 0.01),
+      JSON.stringify(evMarks()));
 
 // 4. drag moves the range by exactly the distance dragged
 const v0 = run('VIEW').slice();

@@ -1,6 +1,6 @@
 ---
 name: token-report
-description: Build a local HTML report of Codex token usage from rollout logs. Use when asked about token usage, the context window, cached vs uncached input, prompt caching, which sessions or tool outputs burn the most tokens, how long responses, turns or tools take (latency, response time, waiting or queueing), when the weekly rate limit last reset or how much of it is used, which account the usage belongs to, or for a token/usage report or dashboard.
+description: Build a local HTML report of Codex token usage from rollout logs. Use when asked about token usage, the context window, cached vs uncached input, prompt caching, which sessions or tool outputs burn the most tokens, how long responses, turns or tools take (latency, response time, waiting or queueing), when the weekly rate limit last reset or how much of it is used, how often the rate limit was hit, which account the usage belongs to, or for a token/usage report or dashboard.
 ---
 
 # Token Report
@@ -62,10 +62,12 @@ the index, marking every failed check with `!`, and exits non-zero if any check 
 Use `--no-open` when the user only wants numbers, and read the summary the script prints on
 stdout: one line of totals (responses, input counted with tiktoken, then Codex's recorded
 input, uncached, cache hit and output; without the tokenizer, recorded input only), a line
-of response time (median, p90, and the estimated share above the fastest pace) and, when
-an account and a limit window are available, a line with the account, plan, weekly
-limit used, when the current window opened, and when it next resets. Use `--json` when you
-need to answer a specific question rather than hand over a page.
+of response time (median, p90, and the estimated share above the fastest pace), a line
+of rate-limit events (snapshots in which Codex logged a limit as reached, and how many days
+they fell on) when there were any, and, when an account and a limit window are available, a
+line with the account, plan, weekly limit used, when the current window opened, and when it
+next resets. Use `--json` when you need to answer a specific question rather than hand over
+a page.
 
 The first run parses the whole corpus; later runs reuse a SQLite index at
 `~/.codex/token-counter/index.db` and only re-read files that changed. On the development
@@ -139,7 +141,8 @@ Five headline numbers — input (counted with tiktoken), output, cache hit, sess
 weekly limit as the server's own reported percentage — plus the longest session, and three
 charts: a cumulative token curve per weekly limit window with the reported percentage
 overlaid; daily input stacked by the model that was charged for it; response time by day,
-as two lines, the median and the p90; and content composition by category. The median response time is also a tile. The per-model
+as two lines, the median and the p90, with the rate-limit events Codex logged each day as
+bars behind them on an axis of their own; and content composition by category. The median response time is also a tile. The per-model
 response times and pace estimates, the hour of day, turn time and time per tool are in
 `--json` (`latency`), not on the page.
 

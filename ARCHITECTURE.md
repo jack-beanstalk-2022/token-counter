@@ -904,6 +904,34 @@ response near the boundary belongs to is undecidable — tokens go to the earlie
 **boundaries with no percentage drop** (a split that may be one window whose quoted reset
 moved far enough to read as two, restarting the curve mid-week for no underlying reason).
 
+#### Rate-limit events — reported, counted per day
+
+A snapshot also says whether a limit was reached: `rate_limit_reached_type`, null unless the
+server reported one. A **rate-limit event** is a snapshot with it set, one per snapshot
+whichever windows it names, so a refused request is one event even when both windows are
+full. Nothing is inferred from a percentage reaching 100%. How often it is set on the
+development corpus is not yet measured; `scripts/verify_schema.py` now tallies its values.
+
+The worker keeps each event's time (`limit_events`, epoch seconds; one with no readable
+stamp is counted as `limit_event_no_time`), and `analyze.limit_events` counts them per
+local day, with the daily buckets' own spans. They are drawn as bars on the response-time
+chart (§7), and they keep their own list of days, separate from the timed days: a day the
+limit blocked outright has events and no timed response.
+
+**A fork child's replayed copies are left out.** A child replays its parent's history
+stamped with its own creation time (§2.5), the parent's snapshots among them, so counting
+them would put every refusal the parent logged a second time, on the day the child was
+made. The ledger's replay match cannot help: an event is usually a `token_count` with
+`info: null`, which the ledger never sees. Timing can. A file opens with a burst of records
+written back to back, its header and any replay a millisecond or so apart, and the worker
+records where that burst ends: at the first gap over `OPENING_BURST_GAP_S` (50 ms),
+`opening_burst_end`. In a file that declares a parent, an event inside the burst is the
+parent's, and is counted as `limit_events_replayed` instead. A refusal of the child's own
+needs a round trip to the server, so it lands after the burst. This is an inference, like
+the ledger's replay match: a stall of over 50 ms in the middle of a replay would let the
+later copies through, and a refusal back within 50 ms of the child's first record would be
+dropped. Neither has been measured. A file with no declared parent never loses an event.
+
 ---
 
 ### 5.7 Input counted with tiktoken
@@ -1192,7 +1220,7 @@ with `--public --no-open`, which renders the page from the full pipeline (the in
 as usual) with two differences: the top-session tile drops its note, the session id prefix
 and the `cwd` basename, the only strings on the page taken from the machine rather than
 counted; and `auth.json` is not read. The response-time chart goes with the rest: the
-median and p90 response time per day. Tool names, which come from the machine
+median and p90 response time per day, and the rate-limit events per day (§5.6). Tool names, which come from the machine
 (MCP servers among them), are on neither page. The dry run and the token-share skill both
 list the chart among what is published. `--style` bakes the style the page opens in, which the
 page falls back to when the reader has none remembered. The page is written to disk on the
@@ -1237,8 +1265,14 @@ reconciliation, images, the window table, the data-quality counters — is repor
    over a value axis fixed over the corpus and rounded up to a clean ceiling. A day with
    fewer than five timed responses is not a point, and it and any day with none break the
    line rather than letting it bridge them; every day keeps a hover target that says what it
-   has. Nocturne shows it as a sixth exhibit with a builder of its own (`N3.lines`): a lit
-   tube for the median, a dashed one for the p90, a hover target a day.
+   has. Behind the lines, a bar a day counts the rate-limit events Codex logged (§5.6),
+   in `--warn` at half opacity, on an axis of its own at the right whose ceiling is even, so
+   its middle guide reads a whole number. The bars have their own days: a day with events
+   and no timed response still gets a bar, a hover target, and the chart itself when nothing
+   was timed at all (the legend then says why there are no lines). With no events, the
+   legend says none were logged. Nocturne shows it as a sixth exhibit with a builder of its
+   own (`N3.lines`): a lit tube for the median, a dashed one for the p90, a slab behind them
+   for each day's events, a hover target a day.
 5. **What filled the window** — independently tokenized content, by category
 
 The per-model response times and pace estimates, the hour of day, turns and tools are in
@@ -1477,6 +1511,8 @@ Surfaced in the report, not swallowed. Current corpus values:
 | Charged replayed rows left untimed (`latency_replayed`) | not yet measured |
 | Tool calls timed / replayed / non-positive / over the cap / unmatched / without output | not yet measured |
 | Turns with no opening stamp, or over the cap | not yet measured |
+| Rate-limit events counted (`limit_events`) | not yet measured (§5.6) |
+| ... replayed into a fork child and left out (`limit_events_replayed`), or with no readable stamp (`limit_event_no_time`) | not yet measured |
 
 Every one of these is rendered in the report, not swallowed. A change across runs indicates
 schema drift and is itself reportable — that is the point of surfacing them.
@@ -1539,6 +1575,9 @@ Structural, not deferred work.
   not yet been checked against the development corpus (§5.8).
 - **Tool time includes approval waits**, and calls that ran side by side each count their
   full time (§5.8).
+- **Rate-limit events are the snapshots Codex logged** with a limit reached. A refusal it
+  did not log is not counted, and a fork child's replayed copies are told apart from its
+  own refusals by timing alone (§5.6).
 - **Window boundaries are inferred from where the reported percentage drops.** Overlapping
   windows and boundaries without a drop are counted and published, because the logs cannot
   settle which reading is right (§5.6).
@@ -1546,6 +1585,19 @@ Structural, not deferred work.
 ---
 
 ## 10. Revision history
+
+**Rev 21** — rate-limit events per day, as bars on the response-time chart (§5.6, §7).
+Plugin 1.7.0.
+
+| Change | Cause |
+| --- | --- |
+| A bar a day behind the response-time lines, on an axis of its own: the snapshots in which Codex logged a limit as reached | Requested: how often the limit was hit, beside how slow the days around it were. Reported, as the window percentages are; nothing is inferred from a percentage at 100% |
+| One event a snapshot, whichever windows it names | A refused request is one refusal, even when the 5-hour and the weekly windows are both full |
+| In a file that declares a parent, an event inside the file's opening burst of records is left out and counted (`limit_events_replayed`) | A fork child replays its parent's snapshots stamped with its own creation time, and the ledger never sees an `info: null` snapshot to match it. Two mutation cases: a burst that ends at once counts the copies, one that runs on into the child's work drops its own refusal |
+| Event days are kept apart from the timed days, and are enough on their own for the chart to be drawn | A day the limit blocked outright has events and no timed response; dropping it would hide the days the limit mattered most |
+| The bars move with the shared viewport and are recorded as marks for the WebGL style (the rect mark now takes an alpha) and for Nocturne (a slab a day) | One chart on one axis (§7.1). The page test checks every bar is centred on its day, as tall as its count, labelled on its own axis, wider and no taller when zoomed, and that each event bar becomes one slab |
+| The terminal summary gains a line of rate-limit events and the days they fell on; `verify_schema.py` tallies `rate_limit_reached_type` | How often the field is set on the development corpus is not yet measured; the tally is how to measure it |
+| The token-share skill and dry run name the events among what the published page carries | The page goes public as is (§6.1) |
 
 **Rev 20** — response time by day, on the shared time axis (§7, §7.1). Plugin 1.6.0.
 
@@ -1836,9 +1888,9 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | Check | Result |
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
-| `scripts/test_mutations.py` | **31/31** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **237/237** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
-| `node scripts/test_page.js` | **54/54** on the page's own embedded script: shared ticks across all three time charts, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
+| `scripts/test_mutations.py` | **33/33** historical defects reverted, each caught by the test named for it |
+| `scripts/test_pipeline.py` | **253/253** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, response, turn and tool time with the pace estimate (§5.8), and rate-limit events per day with a fork child's replayed copies left out (§5.6) |
+| `node scripts/test_page.js` | **62/62** on the page's own embedded script: shared ticks across all three time charts, the rate-limit event bars on their own axis, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |
 | `scripts/diag_fork.py` | the known fork pair matches for exactly **37 records at parent index 95** — an independent witness for the §2.5 rule |
