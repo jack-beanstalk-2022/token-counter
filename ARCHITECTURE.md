@@ -1538,7 +1538,7 @@ Structural, not deferred work.
 
 ## 10. Revision history
 
-**Rev 19** — the vocabulary is parsed from its own file. Plugin 1.5.1.
+**Rev 19** — the vocabulary is parsed from its own file, and CI runs every suite. Plugin 1.5.1.
 
 | Change | Cause |
 | --- | --- |
@@ -1546,6 +1546,7 @@ Structural, not deferred work.
 | The same change stops the vocabulary being served from `$TMPDIR/data-gym-cache` | Newer tiktoken caches any path it reads under `sha1(path)` and never checks the copy against the file, so a vocabulary damaged in place loaded as it was before. Reproduced: with the old loader, a vendored file cut to 1,000 lines still loaded 200,019 ranks |
 | `test_vocabulary_read_from_the_file`, with a mutation case restoring `load_tiktoken_bpe` | It fails with the fix reverted on every Python, not only 3.8: it makes `tiktoken.load.read_file` raise as 0.7.0's does, damages a loaded vocabulary in place, and checks that the parsed ranks equal tiktoken's own |
 | `scripts/ref_bpe.py` reads the ranks through `read_ranks` | It promised to work offline "like everything else", and on 3.8 it could not |
+| `.github/workflows/ci.yml`: the four test scripts and `test_page.js` on Ubuntu and Windows, Python 3.8 and 3.14, on every pull request and push to `main`; `fetch_vocab.py --verify` and a manifest check beside them | The suites ran only when someone ran them, and never on the 3.8 the README promises, which is how the loader defect above shipped. The job stops unless `tiktoken` imports, because `test_mutations.py` counts a target's `ImportError` as a caught mutation: without `tiktoken` it reported 29/29, 19 of them caught by nothing but the missing import. `--verify` must print its parity line, since it exits 0 when it cannot download the reference. The manifest check holds `share.py`'s client version to `plugin.json`'s, which drifted once (Rev 17) |
 
 **Rev 18** — response time, turn time and tool time (§5.8). Plugin 1.5.0.
 

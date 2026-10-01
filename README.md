@@ -231,6 +231,11 @@ python scripts/diag_fork.py              # independent witness for fork-replay e
 python scripts/ref_bpe.py                # pure-Python BPE oracle
 ```
 
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the four test scripts and
+`node scripts/test_page.js` on every pull request and every push to `main`, on Ubuntu and
+Windows with Python 3.8 and 3.14, plus `fetch_vocab.py --verify`. The rest need a real
+`~/.codex` corpus or an installed plugin, so they stay manual.
+
 ## Design
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) — in particular §2.2, the canonical usage ledger, which
