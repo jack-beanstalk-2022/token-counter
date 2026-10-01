@@ -1209,6 +1209,12 @@ asserts no tokens-per-percent rate. tokenusage.dev estimates one per plan from m
 recent windows and publishes how. The windows are built from the same clamped ledger rows
 as the days, so a window never holds more than the days do, which the server checks.
 
+The payload also carries `latency`: per local day, the number of timed responses and their
+median and p90 response time, read from `latency.build` (§5.8) over the same ledger rows, so
+a day matches the report's response-time chart (`test_share.py` asserts it). It is a
+separate top-level list rather than fields on `days`, and empty when nothing could be timed.
+The server's contract must accept it.
+
 Nothing from content extraction, no `cwd`, no titles and no account claims can reach the
 payload: it is built from ledger rows, the rate-limit snapshots, and three fields of the file
 result (`session_id`, `date`, and the row timestamps), and the test asserts the exact key set.

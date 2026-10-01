@@ -12,7 +12,8 @@ The token-report skill sends nothing anywhere; its one network call installs tik
 PyPI when it is missing. This script is the one thing that sends, and it sends only when
 run with --yes. What it sends is daily token counts, a handful of
 per-session summaries -- counts, times and a model name -- and, per weekly rate-limit window,
-the plan and percentage the server reported beside the tokens counted in it. Beside the
+the plan and percentage the server reported beside the tokens counted in it, and per day the
+median and p90 response time. Beside the
 numbers it publishes the token-report page itself, rendered for the public, so the link it
 prints opens the same page the user has locally. Never prompts, file contents, paths, session
 titles, or anything from auth.json. See the SKILL.md next to this file.
@@ -36,7 +37,7 @@ REPORT = os.path.normpath(os.path.join(HERE, '..', '..', 'token-report', 'script
 sys.path.insert(0, REPORT)
 
 import report as reportcli  # noqa: E402  -- enforces the Python floor on import
-from tokencounter import analyze, ledger, render, rollout, worker  # noqa: E402
+from tokencounter import analyze, latency, ledger, render, rollout, worker  # noqa: E402
 
 CLIENT = {'name': 'token-counter', 'version': '1.7.0'}
 SCHEMA = 1
@@ -120,6 +121,19 @@ def limit_windows(results, responses, now_s):
             'output': t['output'],
         })
     return out[-WINDOWS_MAX:]
+
+
+def daily_latency(results, charged):
+    """Response time per local day, as the report's chart reads it: how many responses could
+    be timed, and their median and p90 in seconds. Nothing finer than a day is sent.
+
+    Timed by token-report's own `latency.build`, so a day here is the report's bar.
+    """
+    lat, _ = latency.build(results, charged)
+    if not lat.get('available'):
+        return []
+    return [{'date': d['date'], 'responses': d['n'], 'median_s': d['median_s'],
+             'p90_s': d['p90_s']} for d in lat['daily']]
 
 
 def active_seconds(epochs):
@@ -235,6 +249,7 @@ def build_payload(results, charged, handle=None, now=None):
                  for d, v in sorted(days.items()) if v['responses']],
         'sessions': sorted(keep.values(), key=lambda x: (x['start'], x['id'])),
         'windows': limit_windows(results, timeline, now_s),
+        'latency': daily_latency(results, charged),
     }
     if handle:
         payload['handle'] = handle
@@ -381,6 +396,14 @@ def _describe_windows(windows):
             + f"; latest {latest['start'][:10]} at {latest['peak_pct']:g}% used")
 
 
+def _describe_latency(rows):
+    if not rows:
+        return 'latency      no response could be timed'
+    n = sum(r['responses'] for r in rows)
+    return (f"latency      median and p90 response time for {len(rows):,} days "
+            f"({n:,} timed responses)")
+
+
 def describe(payload, notes, handle, api):
     """What will be sent, in words: printed before anything leaves the machine."""
     days = payload['days']
@@ -400,6 +423,7 @@ def describe(payload, notes, handle, api):
         f"sessions     {len(payload['sessions']):,} summarised of {notes['sessions_total']:,}"
         f" (per month, the top {SESSIONS_PER_MONTH} by active time and by tokens)",
         _describe_windows(payload.get('windows') or []),
+        _describe_latency(payload.get('latency') or []),
         '',
         'month        tokens      sessions  longest session',
     ]
@@ -415,7 +439,8 @@ def describe(payload, notes, handle, api):
         '',
         'sent: per-day token counts; per-session start/end times, active time, token counts',
         'and model name, under a one-way hash of the session id; and per weekly limit window,',
-        'its start, the plan and percentage used that Codex logged, and the tokens counted in it.',
+        'its start, the plan and percentage used that Codex logged, and the tokens counted in it;',
+        'and per day, the median and p90 response time and how many responses were timed.',
         'never sent: prompts, outputs, file contents or paths, session titles, your',
         'account or email.',
     ]
