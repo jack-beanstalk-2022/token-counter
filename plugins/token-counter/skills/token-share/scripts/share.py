@@ -12,8 +12,8 @@ The token-report skill sends nothing anywhere; its one network call installs tik
 PyPI when it is missing. This script is the one thing that sends, and it sends only when
 run with --yes. What it sends is daily token counts, a handful of
 per-session summaries -- counts, times and a model name -- and, per weekly rate-limit window,
-the plan and percentage the server reported beside the tokens counted in it, and per day the
-median and p90 response time. Beside the
+the plan and percentage the server reported beside the tokens counted in it, and over the last
+month the median and p90 response and turn time. Beside the
 numbers it publishes the token-report page itself, rendered for the public, so the link it
 prints opens the same page the user has locally. Never prompts, file contents, paths, session
 titles, or anything from auth.json. See the SKILL.md next to this file.
@@ -61,6 +61,11 @@ WINDOWS_MAX = 104
 # inferred from its quoted reset, seven days before it, so it could land earlier than the
 # logs do; such a window is dropped here rather than failing the whole share.
 EARLIEST_START = '2025-04-01T00:00:00Z'
+
+# Response times are sent for the last month of responses, with at most this many model and
+# effort groups: the server refuses a span over 92 days and more than 50 groups.
+LATENCY_DAYS = 30
+LATENCY_GROUPS_MAX = 50
 
 
 def _iso(epoch_s):
@@ -123,17 +128,47 @@ def limit_windows(results, responses, now_s):
     return out[-WINDOWS_MAX:]
 
 
-def daily_latency(results, charged):
-    """Response time per local day, as the report's chart reads it: how many responses could
-    be timed, and their median and p90 in seconds. Nothing finer than a day is sent.
+def latency_summary(results, charged, now_s):
+    """Response and turn times over the last LATENCY_DAYS days, in the shape the server's
+    `latency` takes (docs/share-protocol.md in tokenusage.dev), or None when nothing was timed.
 
-    Timed by token-report's own `latency.build`, so a day here is the report's bar.
+    Timed by token-report's own `latency.build`, so the figures are the report's. Only a
+    day-level span and aggregates leave: no tool names, and no UTC hour or weekday buckets,
+    which the server leaves optional because they say when a sharer works.
     """
-    lat, _ = latency.build(results, charged)
-    if not lat.get('available'):
-        return []
-    return [{'date': d['date'], 'responses': d['n'], 'median_s': d['median_s'],
-             'p90_s': d['p90_s']} for d in lat['daily']]
+    cutoff = now_s - LATENCY_DAYS * 86400
+    recent = {}
+    for path, rows in charged.items():
+        recent[path] = [r for r in rows
+                        if (worker.epoch(r.get('ts')) or 0) >= cutoff]
+    lat, _ = latency.build(results, recent)
+    if not lat.get('available') or not lat.get('daily'):
+        return None
+    dates = [d['date'] for d in lat['daily']]
+    turns = lat['turns']
+    groups = []
+    for g in lat['groups'][:LATENCY_GROUPS_MAX]:
+        fit = g.get('fit') or {}
+        groups.append({
+            'model': (g['model'] or 'unknown')[:80],
+            'effort': (g['effort'] or 'unknown')[:40],
+            'n': g['n'],
+            'median_s': g['median_s'],
+            'p90_s': g['p90_s'],
+            'overhead_s': fit.get('overhead_s'),
+            'output_tps': fit.get('output_tps'),
+            'above_share': g.get('above_share'),
+        })
+    r = lat['responses']
+    return {
+        'from': min(dates),
+        'to': max(dates),
+        'responses': {'n': r['n'], 'median_s': r['median_s'], 'p90_s': r['p90_s']},
+        'turns': None if not turns['n'] else {
+            'n': turns['n'], 'median_s': turns['median_s'], 'p90_s': turns['p90_s'],
+            'model_share': turns['model_share']},
+        'groups': groups,
+    }
 
 
 def active_seconds(epochs):
@@ -249,8 +284,10 @@ def build_payload(results, charged, handle=None, now=None):
                  for d, v in sorted(days.items()) if v['responses']],
         'sessions': sorted(keep.values(), key=lambda x: (x['start'], x['id'])),
         'windows': limit_windows(results, timeline, now_s),
-        'latency': daily_latency(results, charged),
     }
+    lat = latency_summary(results, charged, now_s)
+    if lat:
+        payload['latency'] = lat
     if handle:
         payload['handle'] = handle
     return payload, notes
@@ -396,12 +433,12 @@ def _describe_windows(windows):
             + f"; latest {latest['start'][:10]} at {latest['peak_pct']:g}% used")
 
 
-def _describe_latency(rows):
-    if not rows:
-        return 'latency      no response could be timed'
-    n = sum(r['responses'] for r in rows)
-    return (f"latency      median and p90 response time for {len(rows):,} days "
-            f"({n:,} timed responses)")
+def _describe_latency(lat):
+    if not lat:
+        return 'latency      no response in the last month could be timed'
+    r = lat['responses']
+    return (f"latency      {r['n']:,} timed responses, {lat['from']} .. {lat['to']}: median "
+            f"{r['median_s']:g}s, p90 {r['p90_s']:g}s; {len(lat['groups'])} model/effort groups")
 
 
 def describe(payload, notes, handle, api):
@@ -423,7 +460,7 @@ def describe(payload, notes, handle, api):
         f"sessions     {len(payload['sessions']):,} summarised of {notes['sessions_total']:,}"
         f" (per month, the top {SESSIONS_PER_MONTH} by active time and by tokens)",
         _describe_windows(payload.get('windows') or []),
-        _describe_latency(payload.get('latency') or []),
+        _describe_latency(payload.get('latency')),
         '',
         'month        tokens      sessions  longest session',
     ]
@@ -440,7 +477,7 @@ def describe(payload, notes, handle, api):
         'sent: per-day token counts; per-session start/end times, active time, token counts',
         'and model name, under a one-way hash of the session id; and per weekly limit window,',
         'its start, the plan and percentage used that Codex logged, and the tokens counted in it;',
-        'and per day, the median and p90 response time and how many responses were timed.',
+        'and, over the last month, the median and p90 response and turn time, in total and per model.',
         'never sent: prompts, outputs, file contents or paths, session titles, your',
         'account or email.',
     ]
