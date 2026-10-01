@@ -3616,10 +3616,7 @@ def render(model, public=False, style=None):
                  + ('<div class="legend">'
                     '<span><i style="background:var(--uncached)"></i>median response time</span>'
                     '<span><i style="background:var(--dim)"></i>p90</span></div>'
-                    '<p class="sub">From the moment the prompt was complete &mdash; your message '
-                    'or the last tool output &mdash; to the moment Codex recorded the response. '
-                    f'p90: nine in ten responses that day were faster. A day with fewer than '
-                    f'{HOUR_MIN} timed responses is not drawn.</p>' if lat_days else '')
+                    if lat_days else '')
                  + '</div>\n')
 
     # A tile, not only the panel: the tiles are what every style draws, the 3D one included.

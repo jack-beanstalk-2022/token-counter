@@ -1950,9 +1950,8 @@ def test_latency_chart():
     check('the chart is left to the page to draw, with its two series named',
           '<div class="chart" id="latchart"></div>' in html
           and 'median response time</span>' in panel and '>p90</span>' in panel, '')
-    check('the chart says what response time is and which days it leaves out',
-          'nine in ten responses that day were faster' in panel
-          and f'fewer than {render.HOUR_MIN} timed responses is not drawn' in panel, '')
+    check('the chart carries its legend and no description',
+          panel.count('<span><i style=') == 2 and '<p class="sub">' not in panel, '')
     check('no estimate is on the page', 'fastest pace' not in html and 'estimated' not in panel,
           '')
     payload = json.loads(re.search(r'window.__TC__ = (\{.*?\});</script>', html).group(1)
