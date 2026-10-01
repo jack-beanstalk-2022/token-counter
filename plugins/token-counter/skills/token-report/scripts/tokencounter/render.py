@@ -108,6 +108,7 @@ STYLE_CSS = r"""
 .bar{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;
   gap:12px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line)}
 .brand{font-weight:700;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand a{color:inherit;text-decoration:none}
 /* The style switch is one dot, drawn in the style it switches *to* -- so its colours are
    fixed here, not read from the page's variables, which belong to the style on screen. */
 #stylebtn{display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;
@@ -3761,7 +3762,7 @@ def render(model, public=False, style=None):
 <title>Codex Token Report</title>
 <style>{CSS}{STYLE_CSS}</style></head><body>
 <div class="deco" aria-hidden="true">{_matisse()}<div class="wipe"></div></div>
-<nav class="bar"><div class="brand">tokenusage.dev</div><div><button id="stylebtn" type="button" data-next="{nxt[0]}" aria-label="Switch to the {esc(nxt[1])} style"><span class="sdot" aria-hidden="true"></span></button></div></nav>
+<nav class="bar"><div class="brand"><a href="https://tokenusage.dev">tokenusage.dev</a></div><div><button id="stylebtn" type="button" data-next="{nxt[0]}" aria-label="Switch to the {esc(nxt[1])} style"><span class="sdot" aria-hidden="true"></span></button></div></nav>
 <div class="wrap">
 
 <header class="mast">

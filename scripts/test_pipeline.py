@@ -794,9 +794,11 @@ def test_render():
           f"closers={h2.count('</script>')}")
     check('hostile rollout content is escaped in the chart legend',
           'onerror=alert' not in h2 or '&lt;img' in h2)
+    # The brand in the top bar links to the site; a link the reader follows is not a fetch.
+    offline = html.replace('<a href="https://tokenusage.dev">', '', 1)
     check('report is self-contained (no external fetches)',
-          'http://' not in html and 'https://' not in html
-          and 'src="//' not in html)
+          'http://' not in offline and 'https://' not in offline
+          and 'src="//' not in offline)
     check('report embeds the limit series it draws', '__TC__' in html)
     check('the page opens in Clinical and carries a rule for every other style',
           render.STYLES[0][0] == 'clinical' and 'data-style="clinical"' in html
