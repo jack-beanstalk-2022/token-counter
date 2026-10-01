@@ -24,7 +24,7 @@ sys.path.insert(0, LIB)
 
 import test_pipeline as tp                                       # noqa: E402
 import report as rp                                              # noqa: E402
-from tokencounter import analyze, ledger, render, rollout, worker       # noqa: E402
+from tokencounter import analyze, latency, ledger, render, rollout, worker  # noqa: E402
 
 
 def ledger_case(name_fragment):
@@ -335,6 +335,42 @@ def _recorded_input():
     orig = analyze.tiktoken_inputs
     analyze.tiktoken_inputs = lambda fr: {}
     return lambda: setattr(analyze, 'tiktoken_inputs', orig)
+
+
+@case('a request starts at the input before its usage record, not before its first output',
+      lambda: tp.test_response_time_from_records())
+def _late_request_start():
+    # A tool that finishes while its response is still streaming writes its output before
+    # that response's usage record; anchoring there shortens the response by the tool's run.
+    orig = worker._request_start
+    worker._request_start = lambda frozen_ts, frozen, anchor_ts: anchor_ts
+    return lambda: setattr(worker, '_request_start', orig)
+
+
+@case('a response is timed from its last input even when the previous response ended later',
+      lambda: tp.test_response_time_from_records())
+def _input_only_start():
+    # After a compaction the last input predates the compaction call, so the next response
+    # is charged the compaction's time as well as its own.
+    orig = latency._response_start
+    latency._response_start = lambda req, prev_end: req
+    return lambda: setattr(latency, '_response_start', orig)
+
+
+@case('a response with no request stamp is timed from the previous response',
+      lambda: tp.test_latency_caps_and_counters())
+def _gap_as_response():
+    orig = latency._timed_start
+    latency._timed_start = lambda req, prev_end: latency._response_start(req, prev_end)
+    return lambda: setattr(latency, '_timed_start', orig)
+
+
+@case("a fork child's replayed tool calls are timed as its own",
+      lambda: tp.test_replayed_history_is_not_timed())
+def _replayed_tools():
+    orig = latency._own_work
+    latency._own_work = lambda call_t, live_start: True
+    return lambda: setattr(latency, '_own_work', orig)
 
 
 def main():

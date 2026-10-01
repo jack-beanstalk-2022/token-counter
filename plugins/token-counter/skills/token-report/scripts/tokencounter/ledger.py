@@ -105,6 +105,9 @@ def _charged_record(rec, stream):
         'response_id': rec.get('response_id'),
         'stream': stream,
         'index': rec.get('i'),
+        # When the request went out, and which turn it belongs to (tokencounter.latency).
+        'req_ts': rec.get('req_ts'),
+        'turn': rec.get('turn'),
     }
 
 

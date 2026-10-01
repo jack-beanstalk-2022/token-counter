@@ -25,6 +25,9 @@ BATCH_ITEMS = 512
 PREVIEW_CHARS = 120
 HOT_ITEMS = 25
 
+TOOL_CALLS = ('function_call', 'custom_tool_call', 'local_shell_call')
+TOOL_OUTPUTS = ('function_call_output', 'custom_tool_call_output', 'local_shell_call_output')
+
 # Resolution of the per-file reported-usage curve.  A busy file emits a rate-limit snapshot
 # on every response -- 6,000 of them in one file here -- and they are step-identical within
 # a bucket, so keeping the last reading per quarter hour loses nothing visible on a chart
@@ -80,6 +83,18 @@ def _charged_stream(res):
     and went unnoticed until an invariant check caught it.
     """
     return 'explicit' if res['explicit'] else 'legacy'
+
+
+def _request_start(frozen_ts, frozen, anchor_ts):
+    """When the request behind a usage record went out.
+
+    The input-side stamp as it stood at the response's first output item, when there was
+    one.  A function rather than an inline test so the mutation harness can revert it: a
+    tool that finishes while its response is still streaming writes its output before the
+    response's usage record, and taking the anchor at the usage record instead shortens that
+    response by the tool's whole run.
+    """
+    return frozen_ts if frozen else anchor_ts
 
 
 def _is_model_call(rec, usage, prev_state, stream):
@@ -245,6 +260,9 @@ def _extract(path, full, vocab=None, num_threads=1):
         'responses': [],
         'hot_items': [], 'resend_cost': 0, 'unique_tokens': 0,
         'rate_limits': [],
+        # Timing (ARCHITECTURE.md 5.8): when each turn opened, indexed by turn, and every
+        # tool call as [name, call time in epoch seconds, seconds from the call to its output].
+        'turn_starts': [], 'tool_times': [],
         'counters': {},
         'error': None,
     }
@@ -268,6 +286,16 @@ def _extract(path, full, vocab=None, num_threads=1):
     prev_state = None
     prev_total_in = None
     rl_acc = {}                      # exact (window_minutes, resets_at) -> snapshot aggregate
+
+    # When each request went out.  The rollout stamps a record when it is written, and has no
+    # send time, but a request is sent as soon as its prompt is complete: the user's message
+    # or the last tool output.  So the latest input-side record is the request's start --
+    # as it stood when the response's FIRST output item arrived.  Freezing it there matters
+    # because a tool can run while its response is still streaming, and its output, written
+    # before the response's usage record, would otherwise pass for the request's start.
+    anchor_ts = None                 # latest input-side record: a turn opening, or an input item
+    req_ts, req_frozen = None, False
+    call_at = {}                     # call_id -> (tool name, call timestamp), awaiting output
 
     # Deferred tokenization: collect texts across the file, encode once, then assemble.
     texts = []                       # every text destined for the tokenizer
@@ -373,6 +401,8 @@ def _extract(path, full, vocab=None, num_threads=1):
 
         if outer == 'turn_context':
             turn_index += 1
+            res['turn_starts'].append(ts)
+            anchor_ts = ts
             model = payload.get('model') or model
             effort = payload.get('effort') or effort
             if model:
@@ -385,6 +415,7 @@ def _extract(path, full, vocab=None, num_threads=1):
             continue
 
         if outer == 'world_state':
+            anchor_ts = ts                          # part of the next prompt, like any input
             if full:
                 segs, imgs = classify.world_state(payload)
                 if segs:
@@ -418,7 +449,10 @@ def _extract(path, full, vocab=None, num_threads=1):
                 seen_rid.add(rid)
             u = payload.get('usage') or {}
             rec = {'usage': u, 'ts': ts, 'model': model, 'effort': effort,
-                   'response_id': rid, 'i': len(res['explicit'])}
+                   'response_id': rid, 'i': len(res['explicit']),
+                   'req_ts': _request_start(req_ts, req_frozen, anchor_ts),
+                   'turn': turn_index}
+            req_ts, req_frozen = None, False
             res['explicit'].append(rec)
             usage_marks.append(('explicit', rec['i'], list(pending)))
             pending = []
@@ -457,23 +491,50 @@ def _extract(path, full, vocab=None, num_threads=1):
                 ctr['raw_repeat'] += 1
             prev_state = state
             rec = {'last': last, 'total': total, 'ts': ts, 'model': model,
-                   'effort': effort, 'i': len(res['legacy'])}
+                   'effort': effort, 'i': len(res['legacy']),
+                   'req_ts': _request_start(req_ts, req_frozen, anchor_ts),
+                   'turn': turn_index}
+            req_ts, req_frozen = None, False
             res['legacy'].append(rec)
             usage_marks.append(('legacy', rec['i'], list(pending)))
             pending = []
             continue
 
-        if outer == 'response_item' and full:
+        if outer == 'response_item':
             t = payload.get('type')
+            # Timing reads items on both passes; it needs only their side and their stamps.
+            role = classify.item_role(payload)
+            if role == 'output':
+                if not req_frozen:
+                    req_ts, req_frozen = anchor_ts, True
+            else:
+                anchor_ts = ts
+            if t in TOOL_CALLS:
+                cid = payload.get('call_id')
+                if cid:
+                    call_at[cid] = (payload.get('name') or t, ts)
+            elif t in TOOL_OUTPUTS:
+                got = call_at.pop(payload.get('call_id'), None)
+                if got is None:
+                    ctr['tool_output_unmatched'] += 1
+                else:
+                    # The call's own time travels with it: a fork child's replayed history
+                    # is stamped with the child's creation time, and only the reader of the
+                    # ledger knows where the child's own work begins (tokencounter.latency).
+                    a, b = epoch(got[1]), epoch(ts)
+                    res['tool_times'].append(
+                        [got[0], None if a is None else round(a, 3),
+                         None if a is None or b is None else round(b - a, 3)])
+            if not full:
+                continue
             segs, imgs = classify.response_item(payload)
             tool = None
-            if t in ('function_call', 'custom_tool_call', 'local_shell_call'):
+            if t in TOOL_CALLS:
                 tool = payload.get('name')
                 cid = payload.get('call_id')
                 if cid and tool:
                     call_names[cid] = tool
-            elif t in ('function_call_output', 'custom_tool_call_output',
-                       'local_shell_call_output'):
+            elif t in TOOL_OUTPUTS:
                 tool = call_names.get(payload.get('call_id'))
             elif t == 'reasoning':
                 for _s in (payload.get('summary') or []):
@@ -482,6 +543,9 @@ def _extract(path, full, vocab=None, num_threads=1):
             continue
 
     res['rate_limits'] = finish_rate_limits(rl_acc)
+    if call_at:
+        # Interrupted, still running when the file was read, or its output never written.
+        ctr['tool_no_output'] += len(call_at)
 
     if not res['explicit'] and not res['legacy']:
         ctr['no_usage_data'] = 1

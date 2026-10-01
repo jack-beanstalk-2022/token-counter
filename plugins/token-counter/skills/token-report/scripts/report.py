@@ -488,6 +488,16 @@ def main(argv=None):
                   f"{t['uncached']/1e6:.0f}M uncached | "
                   f"{hit} cached | "
                   f"{t['output']/1e6:.0f}M output")
+        lt = model.get('latency') or {}
+        if lt.get('available'):
+            r = lt['responses']
+            sec = lambda x: render.secs(x).replace('&mdash;', '--')
+            line = (f"response time {sec(r['median_s'])} median, {sec(r['p90_s'])} p90 "
+                    f"over {r['n']:,} responses")
+            if r.get('above_share') is not None:
+                # An estimate, worded as one: the rollout has no server timings (§5.8).
+                line += f" | an estimated {100 * r['above_share']:.0f}% above the fastest pace"
+            print(line)
         rl = model.get('rate_limits') or {}
         cur = rl.get('current')
         if acct.get('available') or cur:
