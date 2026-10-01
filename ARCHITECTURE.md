@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  226 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  230 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -507,13 +507,26 @@ naming:
 
 ```python
 from tiktoken import Encoding
-from tiktoken.load import load_tiktoken_bpe
 
-ranks = load_tiktoken_bpe(VENDORED_PATH)        # any filename, read directly
+ranks = encoding.read_ranks(VENDORED_PATH)      # any filename, parsed from the file itself
 enc = Encoding(name="o200k_base_vendored", pat_str=O200K_PAT,
                mergeable_ranks=ranks,
                special_tokens={"<|endoftext|>": 199999, "<|endofprompt|>": 200018})
 ```
+
+`read_ranks` parses the `.tiktoken` format (`base64(token) rank`, one pair per line) exactly
+as `tiktoken.load.load_tiktoken_bpe` does, and `scripts/test_pipeline.py` checks the two agree.
+That loader is not called, for two reasons (Rev 19):
+
+- **It does not read the file.** It reads through `read_file_cached`, which copies any path
+  it is given into `$TMPDIR/data-gym-cache/<sha1(path)>` and serves that copy from then on,
+  without looking at the file again. A vocabulary damaged or replaced in place kept loading
+  as it was, while the cache key (§3.2) hashed the file as it is.
+- **On Python 3.8 it cannot read a local path at all.** tiktoken 0.7.0 is the last release
+  for 3.8, and its `read_file` raises for any local path unless the `blobfile` package is
+  installed. A 3.8 run had no tokenizer and an empty content breakdown, with an error
+  telling the user to re-vendor a vocabulary that was fine. It looked fine only on a machine
+  where a newer tiktoken had already left the cached copy in `/tmp`.
 
 Verified in a fresh process with `socket.socket` hard-blocked: the encoding builds and
 produces **token-for-token identical output to stock `o200k_base`**. Startup is ~0.3s.
@@ -1065,7 +1078,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 226 cases
+│   ├── test_pipeline.py                  # §3–§7, 230 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1525,6 +1538,15 @@ Structural, not deferred work.
 
 ## 10. Revision history
 
+**Rev 19** — the vocabulary is parsed from its own file. Plugin 1.5.1.
+
+| Change | Cause |
+| --- | --- |
+| `encoding.read_ranks` parses the vendored `.tiktoken` file; `encoding.load` no longer imports `tiktoken.load` | Found by running the suites on Python 3.8, which the README promises: tiktoken 0.7.0, the last release for 3.8, cannot read a local path without `blobfile`, so a 3.8 run had no tokenizer. Four `test_pipeline.py` cases fail there. The report itself only looked right where a newer tiktoken had already left the vendored file in `/tmp` |
+| The same change stops the vocabulary being served from `$TMPDIR/data-gym-cache` | Newer tiktoken caches any path it reads under `sha1(path)` and never checks the copy against the file, so a vocabulary damaged in place loaded as it was before. Reproduced: with the old loader, a vendored file cut to 1,000 lines still loaded 200,019 ranks |
+| `test_vocabulary_read_from_the_file`, with a mutation case restoring `load_tiktoken_bpe` | It fails with the fix reverted on every Python, not only 3.8: it makes `tiktoken.load.read_file` raise as 0.7.0's does, damages a loaded vocabulary in place, and checks that the parsed ranks equal tiktoken's own |
+| `scripts/ref_bpe.py` reads the ranks through `read_ranks` | It promised to work offline "like everything else", and on 3.8 it could not |
+
 **Rev 18** — response time, turn time and tool time (§5.8). Plugin 1.5.0.
 
 | Change | Cause |
@@ -1790,8 +1812,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | Check | Result |
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
-| `scripts/test_mutations.py` | **29/29** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **226/226** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
+| `scripts/test_mutations.py` | **30/30** historical defects reverted, each caught by the test named for it |
+| `scripts/test_pipeline.py` | **230/230** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
 | `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |

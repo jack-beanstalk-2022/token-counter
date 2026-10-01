@@ -328,6 +328,27 @@ def _never_installs():
     return lambda: setattr(rp, 'tokenizer_status', orig)
 
 
+@case('the vocabulary is read through tiktoken.load',
+      lambda: tp.test_vocabulary_read_from_the_file())
+def _tiktoken_loader():
+    # Before 1.5.1: `load_tiktoken_bpe`, which needs `blobfile` under tiktoken 0.7.0 (the
+    # last release for Python 3.8) and otherwise serves a copy cached by path.
+    from tokencounter import encoding as tcenc
+    orig = tcenc.read_ranks
+
+    def old(path):
+        from tiktoken.load import load_tiktoken_bpe
+        return load_tiktoken_bpe(path)
+
+    tcenc.read_ranks = old
+    tcenc.load.cache_clear()
+
+    def undo():
+        tcenc.read_ranks = orig
+        tcenc.load.cache_clear()
+    return undo
+
+
 @case('input shown as Codex recorded it, though the run counted it with tiktoken',
       lambda: tp.test_input_counted_with_tiktoken())
 def _recorded_input():

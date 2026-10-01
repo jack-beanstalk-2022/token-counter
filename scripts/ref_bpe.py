@@ -20,10 +20,9 @@ LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    'plugins', 'token-counter', 'skills', 'token-report', 'scripts')
 sys.path.insert(0, LIB)
 
-from tiktoken.load import load_tiktoken_bpe                      # noqa: E402
 from tokencounter import encoding as tcenc                       # noqa: E402
 
-RANKS = load_tiktoken_bpe(tcenc.vendor_path())
+RANKS = tcenc.read_ranks(tcenc.vendor_path())
 PAT = regex.compile(tcenc.O200K_PAT)
 
 SAMPLE = (
