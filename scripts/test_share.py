@@ -141,8 +141,7 @@ def test_nothing_private_is_sent():
     check('no working directory in the payload', SECRET_CWD not in blob and 'someone' not in blob)
     check('no raw session id in the payload', '11111111-aaaa' not in blob)
     check('only the documented keys are sent',
-          set(p) == {'schema', 'client', 'generated_at', 'days', 'sessions', 'windows',
-                     'latency', 'handle'}
+          set(p) == {'schema', 'client', 'generated_at', 'days', 'sessions', 'windows', 'handle'}
           and all(set(d) == {'date', 'responses', 'input', 'cached', 'output', 'reasoning',
                              'sessions'} for d in p['days'])
           and all(set(x) == {'id', 'day', 'start', 'end', 'active_s', 'responses', 'input',
@@ -185,20 +184,30 @@ def _timed_records(day, seconds):
 
 def test_latency():
     _utc()
-    results, charged, _, p, _ = _build(_corpus_file(_timed_records('2026-09-10', [2, 4, 6, 8, 10])))
-    rows = p['latency']
-    check('each day with timed responses carries its median and p90 response time',
-          len(rows) == 1 and rows[0]['date'] == '2026-09-10' and rows[0]['responses'] == 5
-          and rows[0]['median_s'] == 6.0 and rows[0]['p90_s'] == 9.2, str(rows))
-    check('only the documented keys are sent per latency day',
-          all(set(x) == {'date', 'responses', 'median_s', 'p90_s'} for x in rows), str(rows))
+    day = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(days=2)).strftime('%Y-%m-%d')
+    results, charged, _, p, _ = _build(_corpus_file(_timed_records(day, [2, 4, 6, 8, 10])))
+    lat = p.get('latency') or {}
+    check('response times are sent as the server\'s one latency object',
+          lat.get('from') == day and lat.get('to') == day
+          and lat['responses'] == {'n': 5, 'median_s': 6.0, 'p90_s': 9.2}, str(lat))
+    check('turns is null when no turn was timed', lat.get('turns') is None, str(lat))
+    check('only the documented keys are sent for latency',
+          set(lat) == {'from', 'to', 'responses', 'turns', 'groups'}
+          and all(set(g) == {'model', 'effort', 'n', 'median_s', 'p90_s', 'overhead_s',
+                             'output_tps', 'above_share'} for g in lat['groups']), str(lat))
+    check('groups split the timed responses, one per model and effort',
+          [(g['model'], g['effort'], g['n']) for g in lat['groups']]
+          == [('unknown', 'unknown', 5)], str(lat['groups']))
     model = analyze.analyze(results, charged, {}, scope={'label': 'test'})
-    rep = [(d['date'], d['n'], d['median_s'], d['p90_s']) for d in model['latency']['daily']]
-    check('latency days match the report model',
-          rep == [(x['date'], x['responses'], x['median_s'], x['p90_s']) for x in rows], str(rep))
-    *_, q, _ = _build(_corpus(CORPUS))
-    check('a corpus that cannot be timed sends an empty list', q['latency'] == [], str(q['latency']))
+    r = model['latency']['responses']
+    check('the figures are the report\'s',
+          (r['n'], r['median_s'], r['p90_s']) == (5, 6.0, 9.2), str(r))
     check('no prompt text rides along', SECRET_PROMPT not in json.dumps(p))
+    *_, q, _ = _build(_corpus(CORPUS))
+    check('a corpus that cannot be timed sends no latency', 'latency' not in q, str(q.keys()))
+    *_, old, _ = _build(_corpus_file(_timed_records('2026-01-05', [2, 4, 6, 8, 10])))
+    check('responses older than a month are not timed', 'latency' not in old, str(old.get('latency')))
 
 
 def test_sessions_are_capped_per_month():
