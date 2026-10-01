@@ -3409,11 +3409,13 @@ def secs(x):
     """A duration read by a person: ``0.84s``, ``8.4s``, ``34s``, ``2m 05s``, ``1h 05m``."""
     if x is None:
         return '&mdash;'
-    if x < 1:
+    # Each band ends where its own rounding would carry into the next: 0.996 is 1.0s, not
+    # 1.00s; 9.96 is 10s, not 10.0s; 59.6 is 1m 00s, not 60s.
+    if x < 0.995:
         return f'{x:.2f}s'
-    if x < 10:
+    if x < 9.95:
         return f'{x:.1f}s'
-    if x < 60:
+    if x < 59.5:
         return f'{x:.0f}s'
     m, sec = divmod(int(round(x)), 60)
     if m < 60:
@@ -3480,6 +3482,11 @@ def _latency_panel(lat, public=False):
             f'<b>{secs(r["p90_s"])}</b> p90 &middot; {r["n"]:,} responses')
     if share is not None:
         head += f' &middot; an estimated <b>{pct(share, 0)}</b> of it above the fastest pace*'
+        # The estimate covers only models with enough responses for a line; say so when
+        # that is not all of them.
+        cov = r.get('fitted_share')
+        if cov is not None and cov < 0.995:
+            head += f' (of the {pct(cov, 0)} of response time in models with enough responses)'
     head += '</p>'
 
     rows = []

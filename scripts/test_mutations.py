@@ -24,7 +24,7 @@ sys.path.insert(0, LIB)
 
 import test_pipeline as tp                                       # noqa: E402
 import report as rp                                              # noqa: E402
-from tokencounter import analyze, latency, ledger, render, rollout, worker  # noqa: E402
+from tokencounter import analyze, classify, latency, ledger, render, rollout, worker  # noqa: E402
 
 
 def ledger_case(name_fragment):
@@ -371,6 +371,66 @@ def _replayed_tools():
     orig = latency._own_work
     latency._own_work = lambda call_t, live_start: True
     return lambda: setattr(latency, '_own_work', orig)
+
+
+@case("an interrupted response's start survives into the next turn",
+      lambda: tp.test_request_start_edge_cases())
+def _stale_freeze():
+    # An interrupted response writes output and no usage record, so nothing cleared the
+    # start frozen at its first output: the next turn's first response was timed from the
+    # interrupted request, the user's idle time included -- 305 s for a 5 s response.
+    orig = worker._ends_response
+    worker._ends_response = lambda outer, payload: False
+    return lambda: setattr(worker, '_ends_response', orig)
+
+
+@case('a legacy compaction is charged to the response after it',
+      lambda: tp.test_request_start_edge_cases())
+def _compaction_in_next():
+    # The legacy stream charges no usage for a compaction, so the previous-response floor
+    # never sees it, and the next response was timed from the last input before it.
+    orig = worker._request_anchor
+    worker._request_anchor = lambda anchor_ts, compact_ts: anchor_ts
+    return lambda: setattr(worker, '_request_anchor', orig)
+
+
+@case('an uncharged legacy repeat ends the response in flight',
+      lambda: tp.test_request_start_edge_cases())
+def _repeat_ends_response():
+    orig = tp.worker
+    tp.worker = _worker_with((
+        "            if not (full_state == prev_full\n"
+        "                    or (li == 0 and lo_ == 0 and lt > 0)):\n",
+        "            if True:\n"))
+    return lambda: setattr(tp, 'worker', orig)
+
+
+@case("any item the classifier does not call output moves a request's start",
+      lambda: tp.test_request_start_edge_cases())
+def _any_input_anchors():
+    # `classify.item_role` calls everything it does not recognise input, which is right for
+    # prompt content and wrong for timing: a web search the model ran shortened its response.
+    orig = worker._timing_side
+    worker._timing_side = classify.item_role
+    return lambda: setattr(worker, '_timing_side', orig)
+
+
+@case('a replay the ledger charges anyway is timed',
+      lambda: tp.test_replayed_history_is_not_timed())
+def _charged_replay_timed():
+    # An ambiguous one-record match, or every match under --no-replay-exclusion, is charged;
+    # its rows carry the child's creation time and read as millisecond responses.
+    orig = latency._is_replay
+    latency._is_replay = lambda row: False
+    return lambda: setattr(latency, '_is_replay', orig)
+
+
+@case('a token column with a single distinct value sets its rate',
+      lambda: tp.test_pace_split())
+def _sparse_column():
+    orig = latency.FIT_DISTINCT
+    latency.FIT_DISTINCT = 2
+    return lambda: setattr(latency, 'FIT_DISTINCT', orig)
 
 
 def main():

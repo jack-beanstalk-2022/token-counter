@@ -244,13 +244,21 @@ def build(files, scope=None, legacy_ancestry=False, exclude_replay=True):
                     # report's data-quality panel), and `exclude_replay=False` exposes the
                     # other bound rather than hiding it behind a rebuild.
                     keep = norm[best:] if exclude_replay else norm
+                    matched = 0 if exclude_replay else best
                 else:
                     if best == 1:
                         counters['ambiguous'] += in_scope
                         counters['ambiguous_input'] += (
                             (norm[0][1]['last'].get('input_tokens') or 0) * in_scope)
                     keep = norm
+                    matched = best
                 rows = [_charged_record(rec, 'legacy') for _, rec in keep]
+                # A matched record that is charged anyway -- ambiguous, or with the exclusion
+                # off -- still carries the child's creation time, so it is flagged for
+                # whatever reads time off these rows (tokencounter.latency).  Its tokens are
+                # charged as before.
+                for r in rows[:matched]:
+                    r['replayed'] = True
                 # Ancestor history is this file's OWN normalized sequence whether or not the
                 # records were charged -- a grandchild may replay an inherited run.
                 history[path] = norm

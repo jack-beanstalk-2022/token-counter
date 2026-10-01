@@ -97,6 +97,58 @@ def _request_start(frozen_ts, frozen, anchor_ts):
     return frozen_ts if frozen else anchor_ts
 
 
+def _request_anchor(anchor_ts, compact_ts):
+    """The later of the latest input-side stamp and the latest compaction.
+
+    A compaction rebuilds the prompt, so the next request goes out only once it is done.
+    On the explicit stream the compaction call has a usage record of its own, and the
+    previous-response floor (`tokencounter.latency`) covers it; on the legacy stream it has
+    none -- only a `compacted` record and an uncharged zero/zero snapshot -- and without
+    this the next response is charged the compaction's whole run.  Applied when a response's
+    first output arrives, so a compaction call with no output items keeps its own start.
+    """
+    if compact_ts is None or anchor_ts is None:
+        return anchor_ts if compact_ts is None else compact_ts
+    a, c = epoch(anchor_ts), epoch(compact_ts)
+    return compact_ts if (a is not None and c is not None and c > a) else anchor_ts
+
+
+def _ends_response(outer, payload):
+    """Whether a record means no response is still in flight: a turn opening or aborting.
+
+    The start frozen at a response's first output is otherwise cleared only by that
+    response's usage record, and an interrupted response never writes one: the next turn's
+    first response was then timed from the interrupted request, idle time and all.
+    """
+    if outer == 'turn_context':
+        return True
+    return outer == 'event_msg' and payload.get('type') == 'turn_aborted'
+
+
+def _timing_side(payload):
+    """``'input'``, ``'output'`` or None: which side of a model call an item is, for timing.
+
+    Narrower than `classify.item_role`, which counts anything it does not recognise as
+    input -- right for attributing prompt content, wrong for timing, where an unknown item
+    written while a response streams (a web search the model ran, local bookkeeping) would
+    pass for the request's start.  Only known inputs move the start; unknown items are
+    ignored; anything the model emits (``*_call``) counts as output.
+    """
+    t = payload.get('type')
+    if t == 'message':
+        role = payload.get('role')
+        if role == 'assistant':
+            return 'output'
+        return 'input' if role in ('user', 'developer', 'system') else None
+    if not isinstance(t, str):
+        return None
+    if t.endswith('_output') or t == 'agent_message':
+        return 'input'
+    if t in classify.OUTPUT_ITEMS or t.endswith('_call'):
+        return 'output'
+    return None
+
+
 def _is_model_call(rec, usage, prev_state, stream):
     """Whether this usage mark represents a distinct model call, for resend costing.
 
@@ -294,7 +346,9 @@ def _extract(path, full, vocab=None, num_threads=1):
     # because a tool can run while its response is still streaming, and its output, written
     # before the response's usage record, would otherwise pass for the request's start.
     anchor_ts = None                 # latest input-side record: a turn opening, or an input item
+    compact_ts = None                # latest `compacted` record
     req_ts, req_frozen = None, False
+    prev_full = None                 # previous legacy record's full state, as the ledger compares
     call_at = {}                     # call_id -> (tool name, call timestamp), awaiting output
 
     # Deferred tokenization: collect texts across the file, encode once, then assemble.
@@ -403,6 +457,8 @@ def _extract(path, full, vocab=None, num_threads=1):
             turn_index += 1
             res['turn_starts'].append(ts)
             anchor_ts = ts
+            if _ends_response(outer, payload):
+                req_ts, req_frozen = None, False
             model = payload.get('model') or model
             effort = payload.get('effort') or effort
             if model:
@@ -423,6 +479,7 @@ def _extract(path, full, vocab=None, num_threads=1):
             continue
 
         if outer == 'compacted':
+            compact_ts = ts
             ctr['compacted'] += 1
             if payload.get('latest_token_usage_record'):
                 ctr['compacted_usage_copies'] += 1      # saved state, never charged
@@ -461,6 +518,8 @@ def _extract(path, full, vocab=None, num_threads=1):
         if outer == 'event_msg':
             et = payload.get('type')
             if et != 'token_count':
+                if _ends_response(outer, payload):
+                    req_ts, req_frozen = None, False
                 continue
             # Before the usage checks below, not after: a `token_count` with `info: null`
             # still carries a rate-limit snapshot, and there are enough of them that
@@ -494,7 +553,15 @@ def _extract(path, full, vocab=None, num_threads=1):
                    'effort': effort, 'i': len(res['legacy']),
                    'req_ts': _request_start(req_ts, req_frozen, anchor_ts),
                    'turn': turn_index}
-            req_ts, req_frozen = None, False
+            # Only a record the ledger can charge ends a response.  A repeat of the previous
+            # state (a rate-limit refresh re-sending the last usage) or a context snapshot
+            # can arrive mid-stream, and clearing the frozen start there would date the next
+            # charged response from whatever input came in between.
+            full_state = _state_of(rec, last)
+            if not (full_state == prev_full
+                    or (li == 0 and lo_ == 0 and lt > 0)):
+                req_ts, req_frozen = None, False
+            prev_full = full_state
             res['legacy'].append(rec)
             usage_marks.append(('legacy', rec['i'], list(pending)))
             pending = []
@@ -503,18 +570,20 @@ def _extract(path, full, vocab=None, num_threads=1):
         if outer == 'response_item':
             t = payload.get('type')
             # Timing reads items on both passes; it needs only their side and their stamps.
-            role = classify.item_role(payload)
-            if role == 'output':
+            side = _timing_side(payload)
+            if side == 'output':
                 if not req_frozen:
-                    req_ts, req_frozen = anchor_ts, True
-            else:
+                    req_ts, req_frozen = _request_anchor(anchor_ts, compact_ts), True
+            elif side == 'input':
                 anchor_ts = ts
             if t in TOOL_CALLS:
                 cid = payload.get('call_id')
-                if cid:
-                    call_at[cid] = (payload.get('name') or t, ts)
+                if isinstance(cid, str) and cid:
+                    name = payload.get('name')
+                    call_at[cid] = (name if isinstance(name, str) and name else t, ts)
             elif t in TOOL_OUTPUTS:
-                got = call_at.pop(payload.get('call_id'), None)
+                cid = payload.get('call_id')
+                got = call_at.pop(cid, None) if isinstance(cid, str) else None
                 if got is None:
                     ctr['tool_output_unmatched'] += 1
                 else:

@@ -497,6 +497,10 @@ def main(argv=None):
             if r.get('above_share') is not None:
                 # An estimate, worded as one: the rollout has no server timings (§5.8).
                 line += f" | an estimated {100 * r['above_share']:.0f}% above the fastest pace"
+                cov = r.get('fitted_share')
+                if cov is not None and cov < 0.995:
+                    line += (f" (of the {100 * cov:.0f}% of response time in models with "
+                             f"enough responses)")
             print(line)
         rl = model.get('rate_limits') or {}
         cur = rl.get('current')

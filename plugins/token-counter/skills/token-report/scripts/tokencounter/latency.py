@@ -15,8 +15,9 @@ tokens and uncached input tokens -- and call anything above that line time above
 fastest pace.  That excess is mostly queueing and retries, but a slow stretch of generation
 and ordinary variation land there too, so it is never called queue time.
 
-Only charged ledger rows are timed, so a replayed, repeated or context-snapshot record never
-becomes a sample.
+Only charged ledger rows are timed, so a repeated or context-snapshot record never becomes
+a sample; a replayed row the ledger charges anyway (an ambiguous one-record match, or every
+match under ``--no-replay-exclusion``) is flagged by the ledger and left out here.
 """
 import collections
 import datetime
@@ -40,6 +41,9 @@ FIT_MIN = 40
 # thousand samples pin them far more tightly than the timestamps' own jitter.
 FIT_MAX = 4000
 FIT_ITERS = 80
+# A token column enters the fit only with this many distinct values: one response with
+# uncached input among thousands without would otherwise set the input rate on its own.
+FIT_DISTINCT = 10
 TOOLS_KEPT = 50
 
 
@@ -132,12 +136,17 @@ def floor_fit(samples, q=FLOOR_Q):
     data = {0: [1.0] * len(samples),
             1: [o / 1000.0 for _, o, _ in samples],
             2: [u / 1000.0 for _, _, u in samples]}
-    # A column that never varies cannot be told from the intercept.
-    terms = [0] + [t for t in (1, 2) if len(set(data[t])) > 1]
+    # A column that barely varies cannot be told from the intercept.
+    terms = [0] + [t for t in (1, 2) if len(set(data[t])) >= FIT_DISTINCT]
     while terms:
         beta = _quantile_ls(ys, [data[t] for t in terms], q)
         if beta is None:
-            return None
+            # Singular: two columns that move together, or too few distinct points.  The
+            # last token column goes, as a negative one would, rather than the whole fit.
+            if len(terms) == 1:
+                return None
+            terms.pop()
+            continue
         worst = min(zip(beta, terms))
         if worst[0] >= 0:
             got = dict(zip(terms, beta))
@@ -178,6 +187,11 @@ def _timed_start(req, prev_end):
     return None if req is None else _response_start(req, prev_end)
 
 
+def _is_replay(row):
+    """Whether the ledger matched this charged row as a fork child's replayed history."""
+    return bool(row.get('replayed'))
+
+
 def _own_work(call_t, live_start):
     """Whether a tool call belongs to this file's own work, not to replayed history.
 
@@ -213,12 +227,20 @@ def build(files, charged, tz=None):
         prev_end = None
         live_start = None
         for r in rows:
+            # Charged, but stamped with the child's creation time: not timed, and not where
+            # the file's own work -- the replay boundary for its tool calls -- begins.
+            if _is_replay(r):
+                q['latency_replayed'] += 1
+                continue
             end = worker.epoch(r.get('ts'))
             req = worker.epoch(r.get('req_ts'))
             start = _timed_start(req, prev_end)
             if end is not None:
                 prev_end = end if prev_end is None else max(prev_end, end)
-            if start is None or end is None:
+            if end is None:
+                q['latency_no_end'] += 1
+                continue
+            if start is None:
                 q['latency_no_start'] += 1
                 continue
             if live_start is None:
@@ -253,7 +275,7 @@ def build(files, charged, tz=None):
             elif d > TOOL_CAP_S:
                 q['tool_over_cap'] += 1
             else:
-                tools[name or 'unknown'].append(d)
+                tools[name if isinstance(name, str) and name else 'unknown'].append(d)
 
     q['latency_samples'] = len(samples)
     if not samples:
@@ -306,6 +328,9 @@ def build(files, charged, tz=None):
 
     def split(idx):
         fitted = [i for i in idx if above_of[i] is not None]
+        if not fitted:
+            # No line, so no estimate: unavailable, never a measured zero.
+            return {'above_s': None, 'above_share': None, 'median_above_s': None}
         ab = [above_of[i] for i in fitted]
         t = sum(samples[i][1] for i in fitted)
         return {'above_s': _r(sum(ab)), 'above_share': _r(sum(ab) / t, 4) if t else None,
@@ -356,9 +381,12 @@ def build(files, charged, tz=None):
     allv = [s[1] for s in samples]
     lat = {
         'available': True,
+        # `above_share` is over the fitted models' time only; `fitted_share` says how much
+        # of all response time that is, so a headline built on it can say so.
         'responses': dict(_summary(allv), work_s=_r(work), above_s=_r(above),
                           unfit_s=_r(unfit),
-                          above_share=_r(above / (work + above), 4) if work + above else None),
+                          above_share=_r(above / (work + above), 4) if work + above else None,
+                          fitted_share=_r((work + above) / sum(allv), 4)),
         'groups': groups,
         'hours': [{'hour': h, 'n': len(v[0]), 'median_s': _r(_pct(sorted(v[0]), .5)),
                    'median_above_s': _r(_pct(sorted(v[1]), .5))}

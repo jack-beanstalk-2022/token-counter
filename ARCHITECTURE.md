@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  212 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  226 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -956,11 +956,34 @@ so a response's time cannot be read off any one record. It can be read off two.
     Its output is then written before that response's usage record, and taking the latest
     input at the usage record would date the request to the tool's finish and shorten the
     response by the tool's whole run (`worker._request_start`).
-  - *Why the previous response's end.* A compaction call, or two responses with no input
-    between them, has no input of its own after the previous response. Timing it from the
-    last input would charge it with the previous response's time as well.
-  - *Only charged rows are timed.* A replayed, repeated or context-snapshot record never
-    becomes a sample, because the ledger never charges it (§2.2–§2.5).
+  - *Why the previous response's end.* On the explicit stream a compaction call has a
+    usage record of its own and no input after the previous response; timing it, or two
+    responses with no input between them, from the last input would charge each with the
+    previous response's time as well.
+  - *Why the `compacted` stamp.* On the legacy stream a compaction is charged nothing --
+    a `compacted` record and a zero/zero snapshot -- so the previous-response floor never
+    sees it. The start frozen at the next response's first output is therefore the later of
+    the latest input and the latest `compacted` stamp (`worker._request_anchor`); without it
+    a 60 s compaction was charged to a 2 s response. A compaction call with no output items
+    keeps its own start.
+  - *What ends a response besides its usage record.* An interrupted response writes output
+    and no usage record, and its frozen start would otherwise date the next turn's first
+    response, idle time included (305 s for a 5 s response). A `turn_context` or a
+    `turn_aborted` event clears it (`worker._ends_response`). A legacy record the ledger
+    cannot charge -- a repeat of the previous state, or a context snapshot -- does not: one
+    can arrive mid-stream.
+  - *Which items count.* Only known inputs move the start: user, developer and system
+    messages, `*_output` items and `agent_message`. Anything the model emits (`*_call`, and
+    the classifier's output items) freezes it, and an unknown item does neither
+    (`worker._timing_side`). `classify.item_role` calls anything unknown an input, which is
+    right for prompt content and wrong here: a web search the model ran would have dated
+    its own response's start.
+  - *Only charged rows are timed, and not every charged row.* A repeated or
+    context-snapshot record never becomes a sample, because the ledger never charges it
+    (§2.2–§2.5). A replayed record the ledger charges anyway -- an ambiguous one-record
+    match, or every match under `--no-replay-exclusion` -- is flagged `replayed` by the
+    ledger and left out (`latency._is_replay`, counted as `latency_replayed`); it carries
+    the child's creation time and would read as a millisecond response.
   - *A row with no request stamp is not timed.* The previous response's end is only ever
     a lower bound on the start, never the start itself: on its own it would time the whole
     gap between two responses, and every row of a payload extracted before `req_ts`
@@ -977,8 +1000,9 @@ so a response's time cannot be read off any one record. It can be read off two.
   side by side each count their full time. A fork child replays its parent's history
   stamped with the child's creation time (§2.5), so its copied tool calls sit a few
   milliseconds apart; every tool call before the file's first timed response is left out
-  and counted as `tool_replayed` (`latency._own_work`). A file with no timed response
-  contributes no tool time.
+  and counted as `tool_replayed` (`latency._own_work`). Replayed rows the ledger charged
+  do not count as that first response. A file with no timed response contributes no tool
+  time.
 - **Caps.** A response over an hour, or a tool call or turn over two hours, is left out and
   counted, never clipped: its start is not its request's (a sleep, a late write), or it is a
   person's absence.
@@ -987,11 +1011,17 @@ so a response's time cannot be read off any one record. It can be read off two.
 model and effort with at least 40 timed responses, a line is fitted **under the fastest
 tenth**: `seconds = overhead + output_tokens / output_rate + uncached_input / input_rate`, by
 linear quantile regression at q = 0.1 (iteratively reweighted least squares, every term held
-at zero or above). At most 4,000 responses, evenly spaced in time, place the line. Each
+at zero or above). A token column enters only with at least ten distinct values, so one
+response with uncached input among thousands cannot set the input rate alone, and a singular
+design (two columns moving together) drops a column rather than the fit. At most 4,000
+responses, evenly spaced in time, place the line. Each
 response's time **above the pace** is its time minus the line, floored at zero; the rest is
 called the work. The page shows the overhead, the output rate and the share above the pace
 per model, the overall share, and the median time above the pace by local hour of the day,
-where load shows up. Every one of those is starred as an estimate.
+where load shows up. Every one of those is starred as an estimate. A model with too few
+responses has no line, and its time above the pace is unavailable (`None`), never zero; the
+overall share covers the fitted models only, and the page and terminal line say how much of
+all response time that is when it is not all of it (`responses.fitted_share`).
 
 It is **not a queue time**, and is never called one. Above the line lands queueing and
 retries, but also a slow stretch of generation and ordinary variation; the line itself sits
@@ -1004,8 +1034,8 @@ stands out (`test_pace_split`).
 prompt reconstruction already depends on (§5.3): output items are written as they complete
 and before their response's usage record, and inputs before the request that carries them.
 This revision was built without access to that corpus, so §8 has no values for its
-counters yet. `latency_no_start`, `latency_nonpositive` and `latency_over_cap` are the first
-place to look if a figure seems wrong.
+counters yet. `latency_no_start`, `latency_no_end`, `latency_nonpositive` and
+`latency_over_cap` are the first place to look if a figure seems wrong.
 
 **A measured split exists, outside the rollout.** Over its WebSocket transport the Responses
 API can return server timing (`responsesapi.websocket_timing`: time in the inference
@@ -1015,8 +1045,8 @@ under development and is off by default; Codex does not write the event to the r
 to OpenTelemetry metrics and a trace-level log line. Reading it would make a log file a
 second source for the report's figures (§2), so it is not read.
 
-**Cost.** About 1.3 s for a synthetic ledger of 136,500 responses in eight model and effort
-groups, of which the fits are about 0.05 s each. The JSON carries all of it under
+**Cost.** About 1.3–2.4 s, depending on the machine, for a synthetic ledger of 136,500
+responses in eight model and effort groups, of which the fits are 0.05–0.1 s each. The JSON carries all of it under
 `latency`: `responses`, `groups[]` (with `fit`), `hours[]`, `daily[]`, `turns`, `tools[]`
 and the constants used, in `method`.
 
@@ -1035,7 +1065,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 212 cases
+│   ├── test_pipeline.py                  # §3–§7, 226 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1144,8 +1174,10 @@ user gets opens the same page they have locally. `share.py` runs token-report's 
 with `--public --no-open`, which renders the page from the full pipeline (the index is used
 as usual) with two differences: the top-session tile drops its note, the session id prefix
 and the `cwd` basename, the only strings on the page taken from the machine rather than
-counted; the response-time panel leaves out its tool table, whose names (MCP servers among
-them) come from the machine too; and `auth.json` is not read. `--style` bakes the style the page opens in, which the
+counted; the response-time panel goes too (response times by model and effort, the
+hour-of-day profile in the machine's local time, turn time) but leaves out its tool table,
+whose names (MCP servers among them) come from the machine too; and `auth.json` is not
+read. The dry run and the token-share skill both list the panel among what is published. `--style` bakes the style the page opens in, which the
 page falls back to when the reader has none remembered. The page is written to disk on the
 dry run, so what goes public can be opened first, and on `--yes` it is gzipped and `PUT`
 after the numbers under the same token. tokenusage.dev serves it with
@@ -1419,7 +1451,8 @@ Surfaced in the report, not swallowed. Current corpus values:
 | Files that errored during extraction | 0 |
 | Fork-replay exclusion applied (1 = yes, heuristic) | 1 |
 | Responses timed (`latency_samples`) | not yet measured (§5.8) |
-| ... with no request start, a non-positive time, or over the cap | not yet measured |
+| ... with no request start, no end stamp, a non-positive time, or over the cap | not yet measured |
+| Charged replayed rows left untimed (`latency_replayed`) | not yet measured |
 | Tool calls timed / replayed / non-positive / over the cap / unmatched / without output | not yet measured |
 | Turns with no opening stamp, or over the cap | not yet measured |
 
@@ -1499,6 +1532,7 @@ Structural, not deferred work.
 | The worker keeps, per usage record, the request's start (`req_ts`) and turn; per file, each turn's opening stamp and each tool call's time. Both passes read them | Requested: the report measured tokens and nothing about time. The ledger-only pass skipped `response_item` records entirely, and timing needs their side and stamps, not their content |
 | A request's start is frozen at its response's first output item (`worker._request_start`) | A tool finishing mid-stream writes its output before the response's usage record; the latest input at the usage record shortened that response by the tool's run. Mutation case added |
 | A response starts no earlier than the previous charged response's end (`latency._response_start`) | A compaction call has no input of its own; timing it from the last input charged it with the previous response too. Mutation case added |
+| Review of rev 18 before merge, every finding reproduced first: an interrupted response's frozen start is cleared by `turn_context` and `turn_aborted` (`worker._ends_response`); a legacy `compacted` stamp floors the next request (`worker._request_anchor`); an uncharged legacy repeat or snapshot no longer ends the response in flight; only known inputs move a start (`worker._timing_side`); charged replay rows are flagged by the ledger and not timed (`latency._is_replay`); a token column needs ten distinct values, and a singular design drops a column; unfitted groups report no estimate rather than zero; the headline share says what it covers; `latency_no_end` is its own counter; a non-string tool name or call id is survived; `secs` rounds into the next unit; the token-share skill and dry run list the panel | Each was a reachable miscount or crash: 305 s for a 5 s response after an interruption, 62 s for a 2 s response after a legacy compaction, six 6 ms replay "responses" with the exclusion off, a fit set by one response, `TypeError` in `--metrics-only` on a list-typed tool name. The replay fixture stamped every replayed record at one instant, so its millisecond check was vacuous; it now stamps them a millisecond apart. Six mutation cases added |
 | A row with no request stamp of its own is not timed (`latency._timed_start`) | Found in review: falling back to the previous response's end timed the whole gap between two responses, and every row of an archived payload extracted before `req_ts` existed would have been one. Mutation case added |
 | Tool calls before a file's first timed response are left out (`latency._own_work`) | A fork child's replayed tool calls carry the child's creation time and would pass for millisecond calls. Mutation case added |
 | The split into work and time above the pace is an estimate, starred on the page and worded so in the terminal line | The rollout records no server timing, so queue time cannot be measured from it. The excess also holds slow generation and ordinary variation |
@@ -1756,8 +1790,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | Check | Result |
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
-| `scripts/test_mutations.py` | **23/23** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **212/212** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
+| `scripts/test_mutations.py` | **29/29** historical defects reverted, each caught by the test named for it |
+| `scripts/test_pipeline.py` | **226/226** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
 | `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |

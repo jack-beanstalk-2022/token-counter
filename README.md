@@ -97,8 +97,9 @@ The last line a share prints is your report, `https://tokenusage.dev/r/<handle>`
 page as your local report, in the same three styles, for anyone you send the link to. It is
 rendered with token-report's `--public`, which leaves out the top session's id and directory
 name; the dry run writes it to `~/.codex/token-counter/report-shared.html` so you can open
-exactly what will be published. The shared page leaves out the response-time panel's tool
-names too. `--no-report` shares the numbers without it.
+exactly what will be published. Its response-time panel goes too -- response times by
+model, by hour of the day and per turn -- without the tool names. `--no-report` shares the
+numbers without it.
 
 What is sent is Codex's own recorded counts, from the same ledger the report reads, so the
 leaderboard agrees day for day with the report's recorded figures (in `--json` and on its
@@ -219,7 +220,7 @@ machine you are on.
 ```
 python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock o200k_base
 python scripts/test_ledger.py            # 13 response-identity regressions
-python scripts/test_pipeline.py          # 212 pipeline assertions
+python scripts/test_pipeline.py          # 226 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
 python scripts/test_share.py             # the share payload, its privacy and its transport
 python scripts/bench.py                  # the parallelism grid

@@ -65,9 +65,12 @@ windows to estimate how many tokens each plan's weekly limit holds.
 Also sent, unless `--no-report`: the report page, rendered by token-report with `--public`.
 It carries the charts' data (daily input by model, the cumulative token curve and
 reported percentage of each weekly limit window over time, and content composition by
-category in hourly buckets) and the headline numbers. It leaves out the two machine strings
-the local page shows, the top session's id and its directory name, and never reads
-`auth.json`. The server serves it in a sandbox: its scripts run, and it can reach nothing.
+category in hourly buckets), the headline numbers, and the response-time panel: per model
+and effort the median and p90 response time with the estimated overhead, output rate and
+share above the pace, the median time above the pace for each hour of the day (in the
+machine's local time), and turn time. It leaves out the machine strings the local page
+shows -- the top session's id, its directory name, and the names of the tools in the
+response-time panel -- and never reads `auth.json`. The server serves it in a sandbox: its scripts run, and it can reach nothing.
 
 Never sent: prompts, outputs, tool results, file contents or paths, working directories,
 session titles, anything from `auth.json`, or the account email. The plan type comes from
