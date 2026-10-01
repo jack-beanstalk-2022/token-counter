@@ -1,6 +1,6 @@
 ---
 name: token-report
-description: Build a local HTML report of Codex token usage from rollout logs. Use when asked about token usage, the context window, cached vs uncached input, prompt caching, which sessions or tool outputs burn the most tokens, when the weekly rate limit last reset or how much of it is used, which account the usage belongs to, or for a token/usage report or dashboard.
+description: Build a local HTML report of Codex token usage from rollout logs. Use when asked about token usage, the context window, cached vs uncached input, prompt caching, which sessions or tool outputs burn the most tokens, how long responses, turns or tools take (latency, response time, waiting or queueing), when the weekly rate limit last reset or how much of it is used, which account the usage belongs to, or for a token/usage report or dashboard.
 ---
 
 # Token Report
@@ -61,8 +61,9 @@ the index, marking every failed check with `!`, and exits non-zero if any check 
 
 Use `--no-open` when the user only wants numbers, and read the summary the script prints on
 stdout: one line of totals (responses, input counted with tiktoken, then Codex's recorded
-input, uncached, cache hit and output; without the tokenizer, recorded input only) and, when
-an account and a limit window are available, a second line with the account, plan, weekly
+input, uncached, cache hit and output; without the tokenizer, recorded input only), a line
+of response time (median, p90, and the estimated share above the fastest pace) and, when
+an account and a limit window are available, a line with the account, plan, weekly
 limit used, when the current window opened, and when it next resets. Use `--json` when you
 need to answer a specific question rather than hand over a page.
 
@@ -100,6 +101,14 @@ over-read:
   Window boundaries, by contrast, *are* inferred: they are taken from where the reported
   percentage drops, because resets are routinely earlier than seven days.
 
+- **Response time is measured; the queue is not.** A response runs from the moment its
+  prompt was complete (the user's message or the last tool output) to the moment Codex
+  recorded it, so it covers network, queueing, reading the prompt and writing the answer
+  together. The fixed overhead, output tokens/s and "time above the pace" are an estimate
+  fitted to those times, starred on the page. Never call the time above the pace a queue
+  time: retries, slow generation and ordinary variation land there too. Tool time includes
+  any wait for the user's approval.
+
 Do not convert token counts into money, and do not invent a tokens-per-percent rate — the
 corpus shows 95% of a weekly window costing 2.81B recorded input one week and 790M another.
 Quoting the reported percentage and the reset times is fine; those are recorded facts.
@@ -129,7 +138,10 @@ Five headline numbers — input (counted with tiktoken), output, cache hit, sess
 weekly limit as the server's own reported percentage — plus the longest session, and three
 charts: a cumulative token curve per weekly limit window with the reported percentage
 overlaid; daily input stacked by the model that was charged for it; and content composition
-by category.
+by category. Below them, a response-time panel: per model and effort, the median and p90
+response time with the estimated overhead, output rate and share above the pace; the median
+time above the pace by hour of the day; turn time; and time per tool. The median response
+time is also a tile.
 
 The two time charts share one axis, so a day in one is the same x in the other. Scrolling,
 dragging or pinching either chart zooms and pans both — horizontally only, the value axes do

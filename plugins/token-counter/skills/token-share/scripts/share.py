@@ -38,7 +38,7 @@ sys.path.insert(0, REPORT)
 import report as reportcli  # noqa: E402  -- enforces the Python floor on import
 from tokencounter import analyze, ledger, render, rollout, worker  # noqa: E402
 
-CLIENT = {'name': 'token-counter', 'version': '1.4.0'}
+CLIENT = {'name': 'token-counter', 'version': '1.5.0'}
 SCHEMA = 1
 DEFAULT_API = 'https://tokenusage.dev/api'
 
@@ -554,7 +554,8 @@ def main(argv=None):
                   f'             published as is: anyone with the link sees this page. Open it '
                   f'to check.\n             it holds the charts\' data: daily input by model, '
                   f'the weekly limit\n             curves over time, and content composition by '
-                  f'category. --no-report leaves it out.')
+                  f'category; and response\n             times by model, by hour of the day '
+                  f'and per turn, without tool names.\n             --no-report leaves it out.')
         else:
             print(f'\nreport page  could not be built ({why}); the numbers can still be shared',
                   file=sys.stderr)

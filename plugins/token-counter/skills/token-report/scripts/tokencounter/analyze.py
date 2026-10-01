@@ -10,7 +10,7 @@ import datetime
 import functools
 import re
 
-from . import classify, worker
+from . import classify, latency, worker
 
 # A response is a cache-divergence *lead* when a large stable prompt prefix was not covered
 # by reported caching.  This is a hypothesis generator, not an attribution: the rollout
@@ -689,6 +689,11 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
     if focus and focus not in deep:
         deep.append(focus)
 
+    # Response, turn and tool time from the records' own stamps (§5.8).  Its counters join
+    # the data-quality set, so a sample left out is counted where the report can see it.
+    lat, lat_q = latency.build(files, charged)
+    quality.update(lat_q)
+
     inp, cch = totals['input'], totals['cached']
     uniq = totals['unique_tokens'] or 0
     model = {
@@ -765,6 +770,7 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
                         if residual['reported'] else None,
             'opaque_reasoning_chars': cat_chars.get('reasoning_blob', 0),
         },
+        'latency': lat,
         'leads': leads[:LEAD_LIMIT],
         'leads_total': len(leads),
         'hot_items': hot[:50],

@@ -24,7 +24,7 @@ sys.path.insert(0, LIB)
 # No test may reach PyPI. The two that exercise installing lift this for their own runs.
 os.environ['TOKEN_COUNTER_NO_INSTALL'] = '1'
 
-from tokencounter import analyze, classify, deps, encoding, images, ledger, render, rollout, worker  # noqa: E402
+from tokencounter import analyze, classify, deps, encoding, images, latency, ledger, render, rollout, worker  # noqa: E402
 
 RESULTS = []
 
@@ -1476,6 +1476,470 @@ def test_input_counted_with_tiktoken():
           f"{mz['totals']} {mz['quality']}")
 
 
+# --------------------------------------------------------------------------- latency
+
+LAT_T0 = 1_790_000_000               # 2026-09-21, a fixed instant for every timing fixture
+
+
+def _usage(rid, inp, cached, out):
+    return {'response_id': rid, 'usage': {
+        'input_tokens': inp, 'cached_input_tokens': cached, 'output_tokens': out,
+        'reasoning_output_tokens': 0, 'total_tokens': inp + out}}
+
+
+def _user(t, text='q'):
+    return _at(t, 'response_item', {'type': 'message', 'role': 'user',
+                                    'content': [{'type': 'input_text', 'text': text}]})
+
+
+def _said(t, text='a'):
+    return _at(t, 'response_item', {'type': 'message', 'role': 'assistant',
+                                    'content': [{'type': 'output_text', 'text': text}]})
+
+
+def _call(t, cid, name='exec'):
+    return _at(t, 'response_item', {'type': 'function_call', 'call_id': cid, 'name': name,
+                                    'arguments': '{}'})
+
+
+def _out(t, cid, text='ok'):
+    return _at(t, 'response_item', {'type': 'function_call_output', 'call_id': cid,
+                                    'output': text})
+
+
+def _timed_session(t):
+    """Two turns laid out the way Codex writes them, with every gap known in advance.
+
+    Turn 0: a tool call answered, then a final message.  Turn 1: a tool whose output is
+    written while its response is still streaming, then a compaction call with no input
+    of its own, then one more response straight after it.
+    """
+    return [
+        _at(t, 'session_meta', {'session_id': 'L', 'id': 'L'}),
+        _at(t, 'turn_context', {'model': 'm1', 'effort': 'high'}),
+        _user(t + 1),
+        _at(t + 4, 'response_item', {'type': 'reasoning', 'summary': []}),
+        _call(t + 5, 'c1'),
+        _at(t + 6, 'token_usage_record', _usage('r1', 1000, 0, 50)),         # 6 - 1 = 5
+        _out(t + 9, 'c1'),                                                  # tool: 4s
+        _said(t + 14),
+        _at(t + 15, 'token_usage_record', _usage('r2', 1200, 1000, 40)),     # 15 - 9 = 6
+        _at(t + 100, 'turn_context', {'model': 'm1', 'effort': 'high'}),
+        _user(t + 101),
+        _call(t + 103, 'c2', 'apply_patch'),
+        _out(t + 104, 'c2'),                       # in flight: before its response's usage
+        _said(t + 106),
+        _at(t + 107, 'token_usage_record', _usage('r3', 1400, 1200, 30)),    # 107 - 101 = 6
+        _at(t + 120, 'token_usage_record', _usage('r4', 1500, 0, 200)),      # 120 - 107 = 13
+        _said(t + 124),
+        _at(t + 125, 'token_usage_record', _usage('r5', 300, 0, 20)),        # 125 - 120 = 5
+    ]
+
+
+def _latency_of(d, full=True):
+    fn = worker.process if full else worker.metrics_only
+    data = {p: fn(p) for p in rollout.discover(d)}
+    charged, _ = ledger.build(data)
+    return latency.build(data, charged, tz=datetime.timezone.utc)
+
+
+def test_response_time_from_records():
+    """A response runs from the prompt being complete to its usage record, and no further."""
+    d = tempfile.mkdtemp()
+    _write(d, 'rollout-lat.jsonl', _timed_session(LAT_T0))
+    for full in (True, False):
+        tag = 'full pass' if full else 'ledger-only pass'
+        lat, q = _latency_of(d, full)
+        g = lat['groups'][0] if lat.get('groups') else {}
+        check(f'five responses are timed ({tag})', lat['responses']['n'] == 5,
+              str(lat['responses']))
+        check(f'response times are the gaps the records leave ({tag})',
+              lat['responses']['total_s'] == 35 and g.get('median_s') == 6,
+              f"{lat['responses']} {g}")
+        tools = {t['tool']: t for t in lat['tools']}
+        check(f'tool time runs from the call to its output ({tag})',
+              tools.get('exec', {}).get('total_s') == 4
+              and tools.get('apply_patch', {}).get('total_s') == 1, str(lat['tools']))
+    r = worker.process(os.path.join(d, 'rollout-lat.jsonl'))
+    starts = [worker.epoch(x['req_ts']) - LAT_T0 for x in r['explicit']]
+    check('a tool output written mid-stream does not become its own request start',
+          starts[2] == 101, str(starts))
+    lat, _ = _latency_of(d)
+    check('a call with no input of its own starts when the previous response ended',
+          _times(d) == [5, 6, 6, 13, 5], str(_times(d)))
+    t = lat['turns']
+    check('a turn runs from its opening to its last response',
+          t['n'] == 2 and t['total_s'] == 15 + 25, str(t))
+    check("the model's share of a turn is its responses' time",
+          t['model_s'] == 11 + 24, str(t))
+
+
+def _times(d, only=''):
+    """Every timed response's seconds, in file order, for files whose path has `only`."""
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, _ = ledger.build(data)
+    out = []
+    for p, rows in sorted(charged.items()):
+        if only not in os.path.basename(p):
+            continue
+        prev = None
+        for r in rows:
+            start = latency._response_start(worker.epoch(r['req_ts']), prev)
+            end = worker.epoch(r['ts'])
+            prev = end if prev is None else max(prev, end)
+            out.append(round(end - start, 3))
+    return out
+
+
+def _legacy_tc(t, last, cum, out=10):
+    u = {'input_tokens': last, 'cached_input_tokens': 0, 'output_tokens': out,
+         'reasoning_output_tokens': 0, 'total_tokens': last + out}
+    c = {'input_tokens': cum, 'cached_input_tokens': 0, 'output_tokens': out,
+         'reasoning_output_tokens': 0, 'total_tokens': cum + out}
+    return _at(t, 'event_msg', {'type': 'token_count',
+                                'info': {'last_token_usage': u, 'total_token_usage': c}})
+
+
+def _fork_corpus(d, turns):
+    """A parent of `turns` legacy turns (a 3 s call, a 17 s tool, an 11 s answer each) and a
+    fork child that replays all of it, then does 5 s + 5 s of work of its own.  With
+    `turns` 0 the parent has one usage record, so the replay is a one-record match.
+
+    The replay is stamped with the child's creation time a millisecond apart, record by
+    record, as a real one is: a replayed tool call then reads as a 1 ms call, not as a zero
+    that any duration filter would drop anyway.
+    """
+    t = LAT_T0
+    parent_work, cum = [], 0
+    for i in range(turns):
+        cum += 1000 * (i + 1)
+        b = t + 100 * i
+        parent_work += [_user(b + 1), _call(b + 3, f'p{i}'), _legacy_tc(b + 4, 1000 * (i + 1), cum),
+                        _out(b + 20, f'p{i}'), _said(b + 30),
+                        _legacy_tc(b + 31, 1000 * (i + 1) + 5, cum + 1000 * (i + 1) + 5)]
+        cum += 1000 * (i + 1) + 5
+    if turns == 0:
+        parent_work = [_user(t + 1), _call(t + 3, 'p0'), _legacy_tc(t + 4, 1000, 1000),
+                       _out(t + 20, 'p0')]
+        cum = 1000
+    parent = ([_at(t, 'session_meta', {'session_id': 'F', 'id': 'P'}),
+               _at(t, 'turn_context', {'model': 'm1', 'effort': 'low'})] + parent_work)
+    _write(d, 'rollout-1-parent.jsonl', parent)
+    tc = t + 1000                                       # the child's creation time
+    replay = [dict(r, timestamp=_at(tc + k / 1000, 'x', {})['timestamp'])
+              for k, r in enumerate(parent_work)]
+    child = ([_at(tc, 'session_meta', {'session_id': 'F', 'id': 'C', 'parent_thread_id': 'P'})]
+             + replay
+             + [_at(tc + 50, 'turn_context', {'model': 'm1', 'effort': 'low'}),
+                _user(tc + 51), _call(tc + 55, 'k1'),
+                _legacy_tc(tc + 56, 9000, cum + 9000),
+                _out(tc + 60, 'k1'), _said(tc + 64),
+                _legacy_tc(tc + 65, 9100, cum + 18100)])
+    _write(d, 'rollout-2-child.jsonl', child)
+
+
+def test_replayed_history_is_not_timed():
+    """A fork child's copy of its parent's history is stamped with the child's creation
+    time; none of it may pass for work the child did -- whether the ledger drops it, or
+    charges it anyway."""
+    d = tempfile.mkdtemp()
+    _fork_corpus(d, 3)
+    lat, q = _latency_of(d)
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    kid = [p for p in charged if 'child' in p][0]
+    check('the replayed usage never reaches the ledger', counters.get('inherited') == 6
+          and len(charged[kid]) == 2, f"{dict(counters)} {len(charged[kid])}")
+    check('the child is timed on its own work only',
+          _times(d, 'child') == [5, 5] and _times(d, 'parent') == [3, 11] * 3
+          and lat['responses']['n'] == 8, f"{_times(d)} {lat['responses']}")
+    ex = {x['tool']: x for x in lat['tools']}.get('exec', {})
+    check('replayed tool calls are counted and left out',
+          q['tool_replayed'] == 3 and ex.get('n') == 4 and ex.get('total_s') == 3 * 17 + 5,
+          f"{dict(q)} {lat['tools']}")
+    check('no replayed tool call passes for a millisecond one',
+          all(v['median_s'] >= 5 for v in lat['tools']) and ex.get('median_s') == 17,
+          str(lat['tools']))
+
+    # The other bound: with the exclusion off the ledger charges the replay, and it must
+    # still not be timed -- six 1 ms responses would drag the pace line to the floor.
+    charged2, _ = ledger.build(data, exclude_replay=False)
+    lat2, q2 = latency.build(data, charged2, tz=datetime.timezone.utc)
+    ex2 = {x['tool']: x for x in lat2['tools']}.get('exec', {})
+    check('a replay charged with the exclusion off is not timed',
+          len(charged2[kid]) == 8 and q2['latency_replayed'] == 6
+          and lat2['responses']['n'] == 8 and lat2['responses']['median_s'] == 5,
+          f"{dict(q2)} {lat2['responses']}")
+    check('... nor are its tool calls', ex2.get('n') == 4 and q2['tool_replayed'] == 3,
+          f"{dict(q2)} {lat2['tools']}")
+
+    # A one-record match is ambiguous: charged and disclosed, and never timed.
+    d3 = tempfile.mkdtemp()
+    _fork_corpus(d3, 0)
+    data3 = {p: worker.process(p) for p in rollout.discover(d3)}
+    charged3, counters3 = ledger.build(data3)
+    lat3, q3 = latency.build(data3, charged3, tz=datetime.timezone.utc)
+    ex3 = {x['tool']: x for x in lat3['tools']}.get('exec', {})
+    check('an ambiguous one-record replay is charged but not timed',
+          counters3.get('ambiguous') == 1 and q3['latency_replayed'] == 1
+          and lat3['responses']['n'] == 3 and lat3['responses']['median_s'] == 5,
+          f"{dict(counters3)} {dict(q3)} {lat3['responses']}")
+    check('... nor is its tool call', ex3.get('n') == 2 and q3['tool_replayed'] == 1,
+          f"{dict(q3)} {lat3['tools']}")
+
+
+def _timed(recs):
+    """Every timed response's seconds for one rollout, through the whole pipeline."""
+    d = tempfile.mkdtemp()
+    _write(d, 'rollout-x.jsonl', recs)
+    return _times(d)
+
+
+def test_request_start_edge_cases():
+    """Where a request starts, in the orderings a real rollout produces."""
+    t = LAT_T0
+
+    def tc(x):
+        return _at(x, 'turn_context', {'model': 'm1', 'effort': 'high'})
+
+    meta = _at(t, 'session_meta', {'session_id': 'E', 'id': 'E'})
+
+    # An interrupted response writes output and no usage record.  Its start must not
+    # outlive it: the next turn is timed from its own message, not the interrupted one.
+    got = _timed([meta, tc(t), _user(t + 1), _said(t + 5),
+                  _at(t + 6, 'token_usage_record', _usage('r1', 100, 0, 5)),
+                  tc(t + 100), _user(t + 101),
+                  _at(t + 105, 'response_item', {'type': 'reasoning', 'summary': []}),
+                  tc(t + 400), _user(t + 401), _said(t + 405),
+                  _at(t + 406, 'token_usage_record', _usage('r2', 200, 0, 5))])
+    check("an interrupted response does not hold the next turn's start", got == [5, 5],
+          str(got))
+    got = _timed([meta, tc(t), _user(t + 1), _said(t + 5),
+                  _at(t + 6, 'token_usage_record', _usage('r1', 100, 0, 5)),
+                  _user(t + 101),
+                  _at(t + 105, 'response_item', {'type': 'reasoning', 'summary': []}),
+                  _at(t + 106, 'event_msg', {'type': 'turn_aborted', 'reason': 'interrupted'}),
+                  _user(t + 401), _said(t + 405),
+                  _at(t + 406, 'token_usage_record', _usage('r2', 200, 0, 5))])
+    check('... and an aborted turn ends it even with no turn opening after it',
+          got == [5, 5], str(got))
+
+    # A legacy compaction has no charged usage of its own; the next response starts when
+    # the compaction is written, not at the last tool output before it.
+    got = _timed([meta, tc(t), _user(t + 1), _call(t + 3, 'c1'), _legacy_tc(t + 4, 1000, 1000),
+                  _out(t + 6, 'c1'),
+                  _at(t + 66, 'compacted', {'message': '', 'replacement_history': []}),
+                  _at(t + 66, 'event_msg', {'type': 'token_count', 'info': {   # its snapshot
+                      'last_token_usage': {'input_tokens': 0, 'output_tokens': 0,
+                                           'total_tokens': 1010},
+                      'total_token_usage': {'input_tokens': 1000, 'output_tokens': 10,
+                                            'total_tokens': 1010}}}),
+                  _said(t + 67), _legacy_tc(t + 68, 300, 1300)])
+    check('a legacy compaction is not charged to the response after it', got == [3, 2],
+          str(got))
+
+    # A legacy repeat (a rate-limit refresh re-sending the last usage) can land mid-stream;
+    # it is not a response, so it must not end the one in flight.
+    got = _timed([meta, tc(t), _user(t + 1), _said(t + 4), _legacy_tc(t + 5, 1000, 1000),
+                  tc(t + 9), _user(t + 10), _call(t + 12, 'c2'), _out(t + 13, 'c2'),
+                  _legacy_tc(t + 14, 1000, 1000),
+                  _said(t + 18), _legacy_tc(t + 20, 1500, 2500)])
+    check('a repeated legacy record does not end the response in flight', got == [4, 10],
+          str(got))
+
+    # Items the model emits that are not in the classifier's output list -- a web search --
+    # and local bookkeeping it does not know at all must not pass for the request's start.
+    got = _timed([meta, tc(t), _user(t + 1),
+                  _at(t + 3, 'response_item', {'type': 'web_search_call', 'status': 'completed'}),
+                  _at(t + 4, 'response_item', {'type': 'ghost_snapshot'}),
+                  _at(t + 6, 'response_item', {'type': 'reasoning', 'summary': []}),
+                  _said(t + 8), _at(t + 9, 'token_usage_record', _usage('r1', 100, 0, 5))])
+    check("only known inputs move a request's start", got == [8], str(got))
+
+    # Rollout content is not trusted to be well-formed: a tool name or call id of the
+    # wrong type is not a reason for the ledger-only pass, or the report, to fail.
+    d = tempfile.mkdtemp()
+    _write(d, 'rollout-odd.jsonl', [
+        meta, tc(t), _user(t + 1),
+        _at(t + 2, 'response_item', {'type': 'function_call', 'call_id': 'c1',
+                                     'name': ['exec'], 'arguments': '{}'}),
+        _at(t + 3, 'response_item', {'type': 'function_call', 'call_id': ['c2'],
+                                     'name': 'exec', 'arguments': '{}'}),
+        _at(t + 4, 'token_usage_record', _usage('r1', 100, 0, 5)),
+        _out(t + 8, 'c1'),
+        _at(t + 9, 'response_item', {'type': 'function_call_output', 'call_id': ['c2'],
+                                     'output': 'x'}),
+        _said(t + 10), _at(t + 11, 'token_usage_record', _usage('r2', 200, 0, 5))])
+    data = {p: worker.metrics_only(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    try:
+        model = analyze.analyze(data, charged, counters, scope={'label': 't'})
+        tools = {x['tool']: x['n'] for x in model['latency']['tools']}
+        ok = tools == {'function_call': 1}
+    except Exception as exc:                          # the failure is the finding
+        ok, tools = False, repr(exc)
+    check('a malformed tool name or call id is survived, not raised', ok, str(tools))
+
+
+def _pace_corpus(n=600, busy_hour=15, seed=11):
+    """`n` responses of one model at a known pace, with extra wait added at one hour of day.
+
+    Pace: 1.5 s fixed, 50 output tokens/s, 5,000 uncached input tokens/s.  A third of the
+    responses wait nothing beyond that; the rest wait a little, and far longer in `busy_hour`.
+    """
+    import random
+    rng = random.Random(seed)
+    rows, t = [], LAT_T0 - LAT_T0 % 86400        # midnight UTC
+    for i in range(n):
+        start = t + i * 3600 // 24 * 2 + rng.randint(0, 60)
+        out = rng.randint(20, 3000)
+        unc = rng.choice([0, rng.randint(500, 40000)])
+        hour = datetime.datetime.fromtimestamp(start, datetime.timezone.utc).hour
+        wait = 0.0 if rng.random() < 1 / 3 else rng.expovariate(1 / (30 if hour == busy_hour else 2))
+        d = 1.5 + out / 50 + unc / 5000 + wait + rng.uniform(0, .02)
+        iso = lambda x: (datetime.datetime.fromtimestamp(x, datetime.timezone.utc)
+                         .isoformat().replace('+00:00', 'Z'))
+        rows.append({'ts': iso(start + d), 'req_ts': iso(start), 'model': 'm1', 'effort': 'high',
+                     'turn': i, 'stream': 'explicit', 'index': i,
+                     'usage': {'input_tokens': unc + 1000, 'cached_input_tokens': 1000,
+                               'output_tokens': out}})
+    return rows
+
+
+def test_pace_split():
+    """The pace line is found under the fastest responses, and the rest is time above it."""
+    rows = _pace_corpus()
+    files = {'a': {'turn_starts': [r['req_ts'] for r in rows], 'tool_times': []}}
+    lat, q = latency.build(files, {'a': rows}, tz=datetime.timezone.utc)
+    f = lat['groups'][0]['fit']
+    check('the fit finds the fixed overhead', abs(f['overhead_s'] - 1.5) < .1, str(f))
+    check('the fit finds the output pace', abs(f['output_tps'] - 50) < 1.5, str(f))
+    check('the fit finds the uncached input pace',
+          abs(f['uncached_input_tps'] - 5000) < 400, str(f))
+    r = lat['responses']
+    check('response time splits into work and time above the pace, and nothing else',
+          abs(r['work_s'] + r['above_s'] - r['total_s']) < .01 and r['unfit_s'] == 0, str(r))
+    hours = {h['hour']: h for h in lat['hours']}
+    calm = [h['median_above_s'] for k, h in hours.items() if k != 15]
+    check('the busy hour stands out in time above the pace',
+          hours[15]['median_above_s'] > 5 * max(calm), f"{hours[15]} vs {max(calm)}")
+    check('every response lands in one hour of the day',
+          sum(h['n'] for h in lat['hours']) == r['n'] and len(lat['hours']) == 24,
+          str(len(lat['hours'])))
+
+    # A model with too few responses gets no line, and its time is kept apart, not guessed.
+    few = [dict(x, model='rare') for x in _pace_corpus(n=latency.FIT_MIN - 1, seed=3)]
+    lat2, _ = latency.build({'a': files['a'], 'b': {'turn_starts': [], 'tool_times': []}},
+                            {'a': rows, 'b': few}, tz=datetime.timezone.utc)
+    rare = [g for g in lat2['groups'] if g['model'] == 'rare'][0]
+    check('too few responses: no pace line, and the time is reported as not split',
+          rare['fit'] is None and rare['above_s'] is None and rare['above_share'] is None
+          and abs(lat2['responses']['unfit_s'] - rare['total_s']) < .01, str(rare))
+    cov = lat2['responses']['fitted_share']
+    check('the headline share says how much of the time it covers',
+          0 < cov < 1 and abs(cov - (1 - rare['total_s'] / lat2['responses']['total_s'])) < 1e-3,
+          str(lat2['responses']))
+    check('... and the page says so when it is not all of it',
+          'in models with enough responses' in render._latency_panel(lat2), '')
+
+    # Two columns that move together, or one that barely moves, make the design singular
+    # or let a single response set a rate: the fit drops the column instead of failing.
+    import random
+    rng = random.Random(4)
+    together = [(1 + o / 50 + rng.random() * .1, o, 10 * o) for o in range(10, 2000, 20)]
+    f = latency.floor_fit(together)
+    check('collinear token columns still give a line', f is not None and f['b'] > 0, str(f))
+    sparse = [(1 + o / 50 + rng.random() * .1, o, 0) for o in range(10, 2000, 20)]
+    sparse[5] = (sparse[5][0] + 30, sparse[5][1], 90000)
+    f = latency.floor_fit(sparse)
+    check('one response with uncached input does not set the input rate', f is not None
+          and f['c'] == 0 and abs(1 / f['b'] - 50) < 2, str(f))
+
+
+def test_latency_caps_and_counters():
+    """A sample that cannot be a response time is counted where the report shows it."""
+    t = LAT_T0
+    iso = lambda x: (datetime.datetime.fromtimestamp(x, datetime.timezone.utc)
+                     .isoformat().replace('+00:00', 'Z'))
+    base = {'model': 'm', 'effort': 'e', 'turn': 0, 'usage': {'output_tokens': 1}}
+    rows = [dict(base, req_ts=iso(t), ts=iso(t + 10)),
+            dict(base, req_ts=iso(t + 11), ts=iso(t + 11)),                 # zero
+            dict(base, req_ts=None, ts=iso(t + 20)),        # no request stamp: not timed
+            dict(base, req_ts=iso(t + 30), ts=iso(t + 30 + latency.RESPONSE_CAP_S + 1)),
+            dict(base, req_ts=None, ts=None)]
+    tools = [['exec', t + 1, 3.0], ['exec', t + 1, 0.0], ['exec', t + 1, latency.TOOL_CAP_S + 1],
+             ['exec', t - 5, 2.0], ['exec', None, None], [['exec'], t + 1, 1.0]]
+    files = {'a': {'turn_starts': [iso(t)], 'tool_times': tools},
+             'b': {'turn_starts': [], 'tool_times': [['exec', t, 1.0]]}}
+    lat, q = latency.build(files, {'a': rows, 'b': []})
+    check('each rejected sample is counted under its own reason',
+          (q['latency_samples'], q['latency_nonpositive'], q['latency_over_cap'],
+           q['latency_no_start'], q['latency_no_end']) == (1, 1, 1, 1, 1), str(dict(q)))
+    # A payload from before `req_ts` existed (an archived one, say) has no request stamps at
+    # all; timing it from each previous response would time the gaps between responses.
+    old = [{k: v for k, v in r.items() if k != 'req_ts'} for r in _pace_corpus(n=50)]
+    lat_old, q_old = latency.build({'a': {}}, {'a': old})
+    check('rows with no request stamp are never timed from the previous response',
+          lat_old['available'] is False and q_old['latency_no_start'] == 50,
+          f"{lat_old} {dict(q_old)}")
+    check('each rejected tool call is counted under its own reason',
+          (q['tool_calls_timed'], q['tool_nonpositive'], q['tool_over_cap'],
+           q['tool_replayed'], q['tool_no_time'], q['tool_without_response'])
+          == (2, 1, 1, 1, 1, 1)
+          and {x['tool'] for x in lat['tools']} == {'exec', 'unknown'}, str(dict(q)))
+    none, q2 = latency.build({'a': {}}, {'a': []})
+    check('no responses: the section says why instead of showing zeros',
+          none == {'available': False, 'reason': 'no charged responses in range'}, str(none))
+    check('the model carries the latency section and its counters',
+          'latency' in axis_model() and 'latency_samples' in axis_model()['quality'])
+
+
+def test_latency_render():
+    """The page shows response time as a tile every style draws and as a panel, marks the
+    estimate as one, and keeps machine-derived tool names off the public page."""
+    d = tempfile.mkdtemp()
+    _write(d, 'rollout-lat.jsonl', _timed_session(LAT_T0))
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    model = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    html = render.render(model)
+    check('a response-time tile sits among the headline numbers',
+          '<div class="k">Response time</div><div class="v">6.0s</div>' in html, '')
+    check('the latency panel follows the charts, so the scene still finds the limit panel first',
+          html.index('class="panel lat"') > html.index('id="modelpie"'))
+    check('the panel names its tools and its estimate',
+          '>exec<' in html and 'apply_patch' in html and 'not a measured queue time' in html)
+    pub = render.render(model, public=True)
+    check('the public page carries no tool name', 'apply_patch' not in pub
+          and '>exec<' not in pub and 'class="panel lat"' in pub)
+    hostile = '<img src=x onerror=alert(1)>'
+    m2 = dict(model, latency=dict(
+        model['latency'], tools=[dict(model['latency']['tools'][0], tool=hostile)],
+        groups=[dict(model['latency']['groups'][0], model=hostile, effort=hostile + '2')]))
+    h2 = render.render(m2)
+    check('hostile tool, model and effort names are escaped in the panel',
+          hostile not in h2 and hostile + '2' not in h2
+          and h2.count('&lt;img src=x onerror=alert(1)&gt;') >= 3, '')
+    # Enough responses for a pace line: the split shows, starred, in the table and the hours.
+    rows = _pace_corpus(n=200)
+    files = {'a': {'turn_starts': [r['req_ts'] for r in rows], 'tool_times': []}}
+    lat, _ = latency.build(files, {'a': rows}, tz=datetime.timezone.utc)
+    panel = render._latency_panel(lat)
+    check('a fitted model shows its overhead, pace and share above it',
+          'Fixed overhead*' in panel and 'above the fastest pace*' in panel
+          and panel.count('class="hrs-col"') == 24 and '<i style="height:' in panel, '')
+    check('with no responses timed, the panel says why and the page draws no tile',
+          'Not timed' in render.render(dict(model, latency={'available': False,
+                                                            'reason': 'none here'}))
+          and 'Response time</div><div class="v">' not in render.render(
+              dict(model, latency={'available': False, 'reason': 'none here'})))
+    check('durations read as a person would write them, rounding into the next unit',
+          [render.secs(x) for x in (0.084, 0.996, 8.44, 9.96, 34.2, 59.6, 125, 3599.6, 3900,
+                                    None)]
+          == ['0.08s', '1.0s', '8.4s', '10s', '34s', '1m 00s', '2m 05s', '1h 00m', '1h 05m',
+              '&mdash;'])
+
+
 # --------------------------------------------------------------- account and rate limits
 
 def _jwt(claims):
@@ -1925,6 +2389,12 @@ def main():
     test_tiktoken_installs_itself()
     test_install_edge_cases()
     test_account_claims()
+    test_response_time_from_records()
+    test_replayed_history_is_not_timed()
+    test_request_start_edge_cases()
+    test_pace_split()
+    test_latency_caps_and_counters()
+    test_latency_render()
     test_rate_limit_windows()
     test_cumulative_curve_is_monotonic()
     test_account_and_limits_render()
