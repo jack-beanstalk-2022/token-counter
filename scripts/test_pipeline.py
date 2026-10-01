@@ -1839,8 +1839,6 @@ def test_pace_split():
     check('the headline share says how much of the time it covers',
           0 < cov < 1 and abs(cov - (1 - rare['total_s'] / lat2['responses']['total_s'])) < 1e-3,
           str(lat2['responses']))
-    check('... and the page says so when it is not all of it',
-          'in models with enough responses' in render._latency_panel(lat2), '')
 
     # Two columns that move together, or one that barely moves, make the design singular
     # or let a single response set a rate: the fit drops the column instead of failing.
@@ -1895,8 +1893,9 @@ def test_latency_caps_and_counters():
 
 
 def test_latency_render():
-    """The page shows response time as a tile every style draws and as a panel, marks the
-    estimate as one, and keeps machine-derived tool names off the public page."""
+    """The page shows response time as a tile every style draws and as a chart on the time
+    axis -- and nothing else: the per-model, hourly, turn and tool breakdowns are in the
+    JSON, and no tool name reaches the page, local or public."""
     d = tempfile.mkdtemp()
     _write(d, 'rollout-lat.jsonl', _timed_session(LAT_T0))
     data = {p: worker.process(p) for p in rollout.discover(d)}
@@ -1905,34 +1904,24 @@ def test_latency_render():
     html = render.render(model)
     check('a response-time tile sits among the headline numbers',
           '<div class="k">Response time</div><div class="v">6.0s</div>' in html, '')
-    check('the latency panel follows the charts, so the scene still finds the limit panel first',
-          html.index('class="panel lat"') > html.index('id="modelpie"'))
-    check('the panel names its tools and its estimate',
-          '>exec<' in html and 'apply_patch' in html and 'not a measured queue time' in html)
+    check('there is no response-time panel below the charts',
+          'class="panel lat"' not in html and 'Fixed overhead' not in html
+          and 'by hour of the day' not in html, '')
+    check('the breakdowns the page leaves out are still in the model',
+          model['latency']['groups'] and model['latency']['hours']
+          and model['latency']['turns']['n'] == 2 and model['latency']['tools'], '')
     pub = render.render(model, public=True)
-    check('the public page carries no tool name', 'apply_patch' not in pub
-          and '>exec<' not in pub and 'class="panel lat"' in pub)
+    check('no tool name reaches the page, local or public',
+          all('apply_patch' not in h and '>exec<' not in h for h in (html, pub))
+          and 'id="latchart"' in pub, '')
+    none = dict(model, latency={'available': False, 'reason': 'none here'})
+    check('with no responses timed, the chart says why and the page draws no tile',
+          'Response time not available &mdash; none here.' in render.render(none)
+          and 'Response time</div><div class="v">' not in render.render(none), '')
     hostile = '<img src=x onerror=alert(1)>'
-    m2 = dict(model, latency=dict(
-        model['latency'], tools=[dict(model['latency']['tools'][0], tool=hostile)],
-        groups=[dict(model['latency']['groups'][0], model=hostile, effort=hostile + '2')]))
-    h2 = render.render(m2)
-    check('hostile tool, model and effort names are escaped in the panel',
-          hostile not in h2 and hostile + '2' not in h2
-          and h2.count('&lt;img src=x onerror=alert(1)&gt;') >= 3, '')
-    # Enough responses for a pace line: the split shows, starred, in the table and the hours.
-    rows = _pace_corpus(n=200)
-    files = {'a': {'turn_starts': [r['req_ts'] for r in rows], 'tool_times': []}}
-    lat, _ = latency.build(files, {'a': rows}, tz=datetime.timezone.utc)
-    panel = render._latency_panel(lat)
-    check('a fitted model shows its overhead, pace and share above it',
-          'Fixed overhead*' in panel and 'above the fastest pace*' in panel
-          and panel.count('class="hrs-col"') == 24 and '<i style="height:' in panel, '')
-    check('with no responses timed, the panel says why and the page draws no tile',
-          'Not timed' in render.render(dict(model, latency={'available': False,
-                                                            'reason': 'none here'}))
-          and 'Response time</div><div class="v">' not in render.render(
-              dict(model, latency={'available': False, 'reason': 'none here'})))
+    check('a hostile reason is escaped',
+          hostile not in render.render(dict(model, latency={'available': False,
+                                                             'reason': hostile})), '')
     check('durations read as a person would write them, rounding into the next unit',
           [render.secs(x) for x in (0.084, 0.996, 8.44, 9.96, 34.2, 59.6, 125, 3599.6, 3900,
                                     None)]
@@ -1943,7 +1932,7 @@ def test_latency_render():
 def test_latency_chart():
     """Response time by day is a third chart on the shared time axis: its bars sit on the
     daily chart's local-day spans, the time above the pace caps the median and fits inside
-    it, a thin day keeps its place and draws nothing, and nothing timed means no chart."""
+    it, a thin day keeps its place and draws nothing, and nothing timed says so."""
     d = tempfile.mkdtemp()
     _write(d, 'rollout-lat.jsonl', _timed_session(LAT_T0))
     data = {p: worker.process(p) for p in rollout.discover(d)}
@@ -1987,9 +1976,11 @@ def test_latency_chart():
     tips = re.findall(r'<title>([^<]*)</title>', svg)
     check('each day says its median, p90 and time above the pace, as an estimate',
           len(tips) == len(lat['daily']) >= 2
-          and all('median time above the pace*' in t and ', p90 ' in t for t in tips), str(tips))
-    check('the chart names both series, the estimate marked as one',
-          'median response time' in svg and 'fastest pace* (estimated)' in svg
+          and all('median time above the fastest pace' in t and t.endswith('(estimated)')
+                  and ', p90 ' in t for t in tips), str(tips))
+    check('the chart names both series, the estimate marked as one, and says what it is',
+          'median response time' in svg and 'fastest pace (estimated)' in svg
+          and 'not a measured queue time' in svg
           and svg.count('clipPath id="tcclip-lat"') == 1, '')
     check('a day is placed at its local-day span',
           len(segs) == len(by) >= 2
@@ -2009,7 +2000,9 @@ def test_latency_chart():
     check('one domain covers the response-time days too',
           dm[0] <= lat['daily'][0]['start'] and dm[1] >= lat['daily'][-1]['end'], str(dm))
     none = render.render(dict(model, latency={'available': False, 'reason': 'none here'}))
-    check('nothing timed: no response-time chart at all', 'id="latchart"' not in none
+    lc = none.split('id="latchart"')[1].split('id="catpie"')[0] if 'id="latchart"' in none else ''
+    check('nothing timed: the chart keeps its place, says why, and draws no bar',
+          'Response time not available' in lc and 'class="bar"' not in lc
           and '"latency_days":[]' in none, '')
 
 

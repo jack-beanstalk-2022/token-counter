@@ -89,31 +89,6 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .chart.inplot{cursor:grab}
 .chart.drag{cursor:grabbing}
 .pie{flex:0 0 auto;width:240px;max-width:100%}
-.ph{font-weight:600;font-size:15px;margin:0 0 4px}
-.ph2{font-weight:600;font-size:13px;margin:16px 0 6px}
-.lat-sum{margin:2px 0 4px;font-variant-numeric:tabular-nums}
-.lat-turns{margin:14px 0 4px}
-.lat .sub{margin-top:8px}
-.tbl{overflow-x:auto;margin:10px 0 4px}
-.tbl table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
-.tbl th{color:var(--dim);font-weight:500;text-align:left;padding:5px 12px 5px 0;
-  border-bottom:1px solid var(--line);white-space:nowrap}
-.tbl td{padding:5px 12px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
-.tbl .num{text-align:right}
-.tbl .dim{color:var(--dim)}
-.hrs{display:grid;grid-template-columns:auto 1fr;column-gap:8px;margin-top:6px}
-.hrs-y{position:relative;min-width:26px;font-size:11px;line-height:14px;color:var(--dim);
-  font-variant-numeric:tabular-nums}
-.hrs-y span{position:absolute;right:0}
-.hrs-y span:first-child{top:-7px}
-.hrs-y span:last-child{bottom:-7px}
-.hrs-plot{display:grid;grid-template-columns:repeat(24,1fr);height:120px;
-  border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-.hrs-col{display:flex;align-items:flex-end;justify-content:center;height:100%}
-.hrs-col:hover{background:var(--line)}
-.hrs-col i{display:block;width:min(24px,64%);background:var(--uncached);border-radius:4px 4px 0 0}
-.hrs-x{grid-column:2;display:grid;grid-template-columns:repeat(24,1fr);margin-top:4px;
-  font-size:11px;color:var(--dim);text-align:center;white-space:nowrap}
 .pies{display:flex;flex-wrap:wrap;gap:24px 48px}
 .pies>div{flex:1 1 380px;min-width:0}
 @media(max-width:640px){.wrap{padding:18px 12px 60px} .tile .v{font-size:19px}}
@@ -227,9 +202,6 @@ STYLE_CSS = r"""
 [data-style="matisse"] .panel:nth-child(even){box-shadow:10px 10px 0 -2px var(--blush)}
 [data-style="matisse"] .panel.pies{box-shadow:-10px 10px 0 -2px var(--straw)}
 [data-style="matisse"] .legend{color:var(--dim)}
-[data-style="matisse"] .ph{font:italic 400 24px/1.2 var(--serif)}
-[data-style="matisse"] .lat-sum b{font:400 22px/1 var(--serif)}
-[data-style="matisse"] .panel.lat{box-shadow:10px 10px 0 -2px var(--blush)}
 [data-style="matisse"] .legend i{width:12px;height:12px;border-radius:60% 40% 55% 45%/55% 60% 40% 45%}
 [data-style="matisse"] .pie path{stroke-width:3;stroke-linejoin:round}
 /* The area under the cumulative curve is a flat sage sheet, cut along the ink line. */
@@ -284,7 +256,6 @@ STYLE_CSS = r"""
   box-shadow:inset 0 1px 0 rgba(224,178,79,.18)}
 [data-style="nocturne"] .tile .v{font-weight:400;color:#f6e7c1}
 [data-style="nocturne"] .panel{border-color:#2a3e49;box-shadow:inset 0 1px 0 rgba(224,178,79,.14)}
-[data-style="nocturne"] .ph{font:italic 400 20px/1.2 var(--serif);color:var(--warn)}
 
 /* The scene is running: it fills the window, and the page beneath it stays in place for
    assistive tech -- every number is still text there -- but is not painted and takes no
@@ -3382,7 +3353,7 @@ def _latency_svg(days, domain):
                              f'height="{cap:.2f}" fill="var(--uncached)" class="mk"></rect>')
             tip += (f'\nmedian {_plain(secs(med))}, p90 {_plain(secs(d.get("p90_s")))}'
                     + ('' if ab is None else
-                       f'\nmedian time above the pace* {_plain(secs(ab))}'))
+                       f'\nmedian time above the fastest pace {_plain(secs(ab))} (estimated)'))
         else:
             tip += '\ntoo few to show'
         parts.append(f'<rect x="0" y="{T}" width="1" height="{H-T-B}" '
@@ -3396,8 +3367,17 @@ def _latency_svg(days, domain):
     parts.append('</svg>')
     legend = ('<span><i style="background:var(--cached)"></i>median response time</span>'
               + ('<span><i style="background:var(--uncached)"></i>median time above the '
-                 'fastest pace* (estimated)</span>' if above else ''))
-    return ''.join(parts) + f'<div class="legend">{legend}</div>'
+                 'fastest pace (estimated)</span>' if above else ''))
+    # The estimate is the one figure here this tool did not measure, so the chart says what
+    # it is.  Codex records no server timing; this is not a queue time and is never called one.
+    note = ('<p class="sub">Response time runs from the moment the prompt was complete '
+            '&mdash; your message or the last tool output &mdash; to the moment Codex recorded '
+            'the response. Time above the fastest pace is estimated: for each model and '
+            'effort, the time beyond what its fastest tenth of responses took for the same '
+            'output and uncached input. Queueing and retries land there, and so do slow '
+            'generation and ordinary variation; Codex records no server timing, so it is not '
+            'a measured queue time.</p>' if above else '')
+    return ''.join(parts) + f'<div class="legend">{legend}</div>{note}'
 
 
 def _plain(s):
@@ -3521,144 +3501,16 @@ def secs(x):
     return f'{h}h {m:02d}m'
 
 
-LAT_GROUPS = 12         # model and effort rows in the latency table; the rest are in --json
-LAT_TOOLS = 10
-HOUR_MIN = 5            # an hour (or a day) with fewer responses is left empty, not drawn tall
+HOUR_MIN = 5            # a day with fewer timed responses is left empty, not drawn tall
 LAT_H = 190             # the response-time chart's height, in the same units as DAILY_H
-def _hours_chart(hours, above):
-    """Median per local hour of the day, one column each: time above the pace when `above`,
-    else the response time itself (no model had enough responses for a line).
-
-    Columns in CSS rather than an SVG: a fixed viewBox scales its labels down with the
-    panel, and on a phone they shrink to a few pixels.  These keep their size at any width.
-    """
-    key = 'median_above_s' if above else 'median_s'
-    by = {h['hour']: h for h in hours}
-    vals = [by[h][key] for h in by if by[h]['n'] >= HOUR_MIN and by[h][key] is not None]
-    top = max(vals) if vals else 0
-    # A clean round ceiling for the one gridline the chart keeps, and a short label for it.
-    ceil_v, ceil_label = top, secs(top)
-    for c, lab in ((1, '1s'), (2, '2s'), (5, '5s'), (10, '10s'), (15, '15s'), (30, '30s'),
-                   (60, '1m'), (120, '2m'), (300, '5m'), (600, '10m'), (1800, '30m'),
-                   (3600, '1h')):
-        if top <= c:
-            ceil_v, ceil_label = c, lab
-            break
-    what = 'time above the pace' if above else 'response time'
-    cols, xs = [], []
-    for hr in range(24):
-        h = by.get(hr)
-        n = h['n'] if h else 0
-        v = h[key] if h else None
-        tip = f'{hr:02d}:00\u2013{(hr + 1) % 24:02d}:00 \u00b7 {n:,} responses'
-        bar = ''
-        if n >= HOUR_MIN and v is not None and ceil_v > 0:
-            tip += f' \u00b7 median {what} {secs(v)}'
-            bar = f'<i style="height:{100 * v / ceil_v:.1f}%"></i>'
-        elif n >= HOUR_MIN:
-            tip += ' \u00b7 no estimate for these models'
-        elif n:
-            tip += ' \u00b7 too few to show'
-        cols.append(f'<div class="hrs-col" title="{esc(tip)}">{bar}</div>')
-        xs.append(f'<span>{hr:02d}</span>' if hr % 3 == 0 else '<span></span>')
-    return (f'<div class="hrs" role="img" aria-label="Median {what} by hour of the day">'
-            f'<div class="hrs-y"><span>{ceil_label if ceil_v else ""}</span><span>0</span></div>'
-            f'<div class="hrs-plot">{"".join(cols)}</div>'
-            f'<div class="hrs-x">{"".join(xs)}</div></div>')
-
-
-def _latency_panel(lat, public=False):
-    """Response time: the headline, the model and effort table, the hour of day, turns and
-    tools.  The split into work and time above the pace is an estimate, and every place it
-    appears is marked as one."""
-    if not lat.get('available'):
-        return (f'<div class="panel lat"><div class="ph">Response time</div>'
-                f'<p class="sub">Not timed &mdash; {esc(lat.get("reason") or "no data")}.</p></div>')
-    r = lat['responses']
-    share = r.get('above_share')
-    head = (f'<p class="lat-sum"><b>{secs(r["median_s"])}</b> median &middot; '
-            f'<b>{secs(r["p90_s"])}</b> p90 &middot; {r["n"]:,} responses')
-    if share is not None:
-        head += f' &middot; an estimated <b>{pct(share, 0)}</b> of it above the fastest pace*'
-        # The estimate covers only models with enough responses for a line; say so when
-        # that is not all of them.
-        cov = r.get('fitted_share')
-        if cov is not None and cov < 0.995:
-            head += f' (of the {pct(cov, 0)} of response time in models with enough responses)'
-    head += '</p>'
-
-    rows = []
-    for g in lat['groups'][:LAT_GROUPS]:
-        f = g.get('fit')
-        tps = '&mdash;' if not f or f['output_tps'] is None else f"{f['output_tps']:,.0f}"
-        rows.append(
-            f'<tr><td>{esc(g["model"])}</td><td>{esc(g["effort"])}</td>'
-            f'<td class="num">{g["n"]:,}</td><td class="num">{secs(g["median_s"])}</td>'
-            f'<td class="num">{secs(g["p90_s"])}</td>'
-            + (f'<td class="num">{secs(f["overhead_s"])}</td>'
-               f'<td class="num">{tps}</td>'
-               f'<td class="num">{pct(g.get("above_share"), 0)}</td>' if f else
-               '<td class="num dim" colspan="3">too few responses to estimate</td>')
-            + '</tr>')
-    more = len(lat['groups']) - LAT_GROUPS
-    table = ('<div class="tbl"><table><thead><tr><th>Model</th><th>Effort</th>'
-             '<th class="num">Responses</th><th class="num">Median</th><th class="num">p90</th>'
-             '<th class="num">Fixed overhead*</th><th class="num">Output tokens/s*</th>'
-             '<th class="num">Above pace*</th></tr></thead><tbody>'
-             + ''.join(rows) + '</tbody></table></div>'
-             + (f'<p class="sub">{more} more in the --json output.</p>' if more > 0 else ''))
-
-    above = any(g.get('fit') for g in lat['groups'])
-    hours = (f'<div class="ph2">Median {"time above the pace*" if above else "response time"}, '
-             f'by hour of the day</div>{_hours_chart(lat.get("hours") or [], above)}')
-
-    t = lat.get('turns') or {}
-    turns = ''
-    if t.get('n'):
-        turns = (f'<p class="lat-turns">Turns, from your message to the last response: '
-                 f'<b>{secs(t["median_s"])}</b> median, <b>{secs(t["p90_s"])}</b> p90 over '
-                 f'{t["n"]:,} turns.')
-        if t.get('model_share') is not None:
-            turns += (f' The model responding is {pct(t["model_share"], 0)} of turn time; the '
-                      f'rest is tools, approvals and Codex between calls.')
-        turns += '</p>'
-
-    tools = ''
-    # Tool names come from the machine (MCP servers among them), so the public page has none.
-    if lat.get('tools') and not public:
-        trs = ''.join(
-            f'<tr><td>{esc(x["tool"])}</td><td class="num">{x["n"]:,}</td>'
-            f'<td class="num">{secs(x["median_s"])}</td><td class="num">{secs(x["p90_s"])}</td>'
-            f'<td class="num">{secs(x["total_s"])}</td></tr>'
-            for x in lat['tools'][:LAT_TOOLS])
-        tools = ('<div class="ph2">Tools, from the call to its output</div>'
-                 '<div class="tbl"><table><thead><tr><th>Tool</th><th class="num">Calls</th>'
-                 '<th class="num">Median</th><th class="num">p90</th><th class="num">Total</th>'
-                 f'</tr></thead><tbody>{trs}</tbody></table></div>'
-                 '<p class="sub">Includes any wait for your approval. Calls that ran side by '
-                 'side each count their full time.</p>')
-
-    note = ('<p class="sub">Response time runs from the moment the prompt was complete '
-            '&mdash; your message or the last tool output &mdash; to the moment Codex recorded '
-            'the response: network, the server&rsquo;s queue, reading the prompt and writing '
-            'the answer, and any retry, together. * Estimated: for each model and effort, a '
-            'line is fitted under the fastest tenth of responses, a fixed overhead plus a time '
-            'per output token and per uncached input token. Time above that line is mostly '
-            'queueing and retries, but slow generation and ordinary variation land there too. '
-            'Codex does not record server timings, so this is not a measured queue time.</p>')
-    return (f'<div class="panel lat"><div class="ph">Response time</div>{head}{table}'
-            f'{hours}{turns}{tools}{note}</div>')
-
-
 def render(model, public=False, style=None):
     """The page: the headline numbers, three time charts over one shared, zoomable range
-    (limit windows, daily input, response time by day), the composition pies, and a
-    response-time panel below them.
+    (limit windows, daily input, response time by day), and the composition pies.
 
     Everything else the model carries -- sessions, reconciliation, images, the window table,
     the data-quality counters and the disclosures that went with them -- is reported through
-    `--json` and the stdout summary, not here.  The response-time panel has no time axis of
-    its own, so it stands outside the shared viewport.
+    `--json` and the stdout summary, not here -- the per-model response times and pace
+    estimates, the hour of day, turns and tools among them.
 
     `public` is the page token-share publishes: the same page, less the two strings on it
     that come from the machine rather than from counting -- the top session's id and the
@@ -3702,11 +3554,15 @@ def render(model, public=False, style=None):
                                                        (str(top['session_id'])[:8], where) if x)
         top_tile = [tile('Longest session', big(top[shown]), top_note)]
 
-    # The third time chart: response time by day, on the same axis as the other two.  None
-    # at all when nothing was timed -- the panel below says why.
+    # The third time chart: response time by day, on the same axis as the other two.  When
+    # nothing was timed its place says why, as the limit chart's does.
+    lat_m = model.get('latency') or {}
     lat_chart = (f'<div class="panel"><div class="chart" id="latchart">'
-                 f'{_latency_svg((model.get("latency") or {}).get("daily") or [], domain or [0, 1])}'
-                 f'</div></div>\n' if (model.get('latency') or {}).get('available') else '')
+                 + (_latency_svg(lat_m.get('daily') or [], domain or [0, 1])
+                    if lat_m.get('available') else
+                    f'<p class="sub">Response time not available &mdash; '
+                    f'{esc(lat_m.get("reason") or "nothing was timed")}.</p>')
+                 + '</div></div>\n')
 
     # A tile, not only the panel: the tiles are what every style draws, the 3D one included.
     lat = model.get('latency') or {}
@@ -3819,7 +3675,6 @@ def render(model, public=False, style=None):
 {lat_chart}
 <div class="panel pies"><div id="catpie"></div><div id="modelpie"></div></div>
 
-{_latency_panel(lat, public=public)}
 
 </div>
 <script>window.__TC__ = {payload};</script>
