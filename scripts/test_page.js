@@ -51,29 +51,47 @@ function node(attrs = {}) {
   };
 }
 
-// The daily bars are rendered by Python; the page only ever moves them, and reads their
-// segments once, for the marks it records.
-const dailyHtml = html.slice(html.indexOf('id="dailychart"'));
-const bars = [...dailyHtml.matchAll(/<g class="bar" data-a="(\d+)" data-b="(\d+)"[^>]*>([\s\S]*?)<\/g>/g)]
-  .map(m => Object.assign(node({ 'data-a': m[1], 'data-b': m[2] }), {
-    sel: 'g.bar',
-    kids: [...m[3].matchAll(/<rect x="[^"]*" y="([^"]*)" width="[^"]*" height="([^"]*)" fill="([^"]*)" class="mk">/g)]
-      .map(r => Object.assign(node({ y: r[1], height: r[2], fill: r[3] }), { sel: 'rect.mk' })),
-  }));
-if (!bars.length) throw new Error('no daily bars in the page');
+// The bar charts -- daily input, and response time by day -- are rendered by Python; the page
+// only ever moves their bars, and reads their segments once, for the marks it records.  Each
+// stub is built from its own chart's markup and no further: the next chart's bars must not
+// be read as this one's.
+function chartHtml(id) {
+  const i = html.indexOf(`id="${id}"`);
+  if (i < 0) return '';
+  const rest = html.slice(i);
+  const j = rest.indexOf('<div class="chart" id=', 1);
+  return j > 0 ? rest.slice(0, j) : rest;
+}
+function barChart(id) {
+  const src = chartHtml(id);
+  if (!src) return null;
+  const bars = [...src.matchAll(/<g class="bar" data-a="(\d+)" data-b="(\d+)"[^>]*>([\s\S]*?)<\/g>/g)]
+    .map(m => Object.assign(node({ 'data-a': m[1], 'data-b': m[2] }), {
+      sel: 'g.bar',
+      kids: [...m[3].matchAll(/<rect x="[^"]*" y="([^"]*)" width="[^"]*" height="([^"]*)" fill="([^"]*)" class="mk">/g)]
+        .map(r => Object.assign(node({ y: r[1], height: r[2], fill: r[3] }), { sel: 'rect.mk' })),
+    }));
+  const h = (src.match(/data-h="(\d+)"/) || [])[1];
+  const parts = ['.clip', '.base', '.peak', '.ax'].map(sel => Object.assign(node(), { sel }));
+  const svg = Object.assign(node({ 'data-h': h, 'data-t': '18', 'data-b': '34' }),
+    { sel: 'svg', kids: [...bars, ...parts] });
+  const [clip, base, peak, ax] = parts;
+  return { src, bars, clip, base, peak, ax, h: +h, host: Object.assign(node(), { kids: [svg] }) };
+}
 
-const clip = Object.assign(node(), { sel: '.clip' });
-const base = Object.assign(node(), { sel: '.base' });
-const peak = Object.assign(node(), { sel: '.peak' });
-const ax = Object.assign(node(), { sel: '.ax' });
-const dailySvg = Object.assign(node({ 'data-h': '210', 'data-t': '18', 'data-b': '34' }),
-  { sel: 'svg', kids: [...bars, clip, base, peak, ax] });
+const daily = barChart('dailychart');
+if (!daily || !daily.bars.length) throw new Error('no daily bars in the page');
+const dailyHtml = daily.src;
+const { bars, clip, base, ax } = daily;
+const lat = barChart('latchart');
+if (!lat || !lat.bars.length) throw new Error('no response-time bars in the page');
 
 const rlHost = node();
-const dailyHost = Object.assign(node(), { kids: [dailySvg] });
+const dailyHost = daily.host;
 const pieHost = node();
 const modelHost = node();
-const els = { rlchart: rlHost, dailychart: dailyHost, catpie: pieHost, modelpie: modelHost };
+const els = { rlchart: rlHost, dailychart: dailyHost, latchart: lat.host, catpie: pieHost,
+              modelpie: modelHost };
 
 const raf = [];
 const timers = new Map();                  // id -> fn; run by flush(), never by the clock
@@ -145,6 +163,26 @@ check('the plot area is the same in both charts',
       +clip.getAttribute('x') === L && +clip.getAttribute('width') === W - L - RM
       && +base.getAttribute('x1') === L && +base.getAttribute('x2') === W - RM,
       `clip=${clip.getAttribute('x')}/${clip.getAttribute('width')} base=${base.getAttribute('x1')}..${base.getAttribute('x2')}`);
+
+// 2a. the response-time chart is the third chart on the same axis
+const sameDays = () => {
+  const d = new Map(bars.map(b => [b.getAttribute('data-a'), b.getAttribute('transform')]));
+  const both = lat.bars.filter(b => d.has(b.getAttribute('data-a')));
+  return { n: both.length, off: both.filter(b => b.getAttribute('transform') !== d.get(b.getAttribute('data-a'))).length };
+};
+let sd = sameDays();
+check('the response-time chart puts each day where the daily chart does',
+      sd.n >= 1 && sd.off === 0, JSON.stringify(sd));
+check('the response-time chart draws the same ticks, and no vertical guides',
+      JSON.stringify(ticksOf(lat.ax.innerHTML)) === JSON.stringify(t2) && !/<line/.test(lat.ax.innerHTML),
+      JSON.stringify([ticksOf(lat.ax.innerHTML), t2]));
+const lMarks = run('SCN').get(lat.host);
+check('the response-time chart records its marks by day, inside its own plot',
+      !!lMarks && lMarks.list.length > 0
+      && lMarks.list.every(m => m.t === 'rect' && m.x + m.w >= L && m.x <= W - RM
+                              && lat.bars.some(b => +b.getAttribute('data-a') === m.day))
+      && JSON.stringify(lMarks.plot) === JSON.stringify([L, 18, W - L - RM, lat.h - 18 - 34]),
+      JSON.stringify(lMarks && lMarks.plot));
 
 const fullPie = pieTotal();
 check('the pie sums the whole range at full extent', !!fullPie, String(fullPie));
@@ -295,6 +333,10 @@ const t1z = ticksOf(rlHost.innerHTML), t2z = ticksOf(ax.innerHTML);
 check('the two charts still share ticks when zoomed',
       t1z.length >= 1 && JSON.stringify(t1z) === JSON.stringify(t2z),
       JSON.stringify([t1z, t2z]));
+sd = sameDays();
+check('zooming moves the response-time chart with the other two',
+      sd.n >= 1 && sd.off === 0 && JSON.stringify(ticksOf(lat.ax.innerHTML)) === JSON.stringify(t2z),
+      JSON.stringify(sd));
 
 // 4. drag moves the range by exactly the distance dragged
 const v0 = run('VIEW').slice();
@@ -340,8 +382,9 @@ check('the charts re-measure for a narrow screen',
       run('W') === 334 && run('L') < 62 && run('PLOT') > 200,
       `W=${run('W')} L=${run('L')} RM=${run('RM')} PLOT=${run('PLOT')}`);
 const tm1 = ticksOf(rlHost.innerHTML), tm2 = ticksOf(ax.innerHTML);
-check('a phone still gets readable ticks, the same ones in both charts',
-      tm1.length >= 2 && JSON.stringify(tm1) === JSON.stringify(tm2), JSON.stringify([tm1, tm2]));
+check('a phone still gets readable ticks, the same ones in every time chart',
+      tm1.length >= 2 && JSON.stringify(tm1) === JSON.stringify(tm2)
+      && JSON.stringify(ticksOf(lat.ax.innerHTML)) === JSON.stringify(tm2), JSON.stringify([tm1, tm2]));
 check('nothing is drawn outside the narrow plot area',
       tm1.every(t => +t.split('=')[0] >= run('L') - 0.5
                      && +t.split('=')[0] <= run('W') - run('RM') + 0.5), JSON.stringify(tm1));

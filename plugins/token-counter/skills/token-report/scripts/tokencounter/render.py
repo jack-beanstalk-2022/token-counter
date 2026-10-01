@@ -319,6 +319,16 @@ const day = t => new Date(t*1000).toLocaleDateString([], {month:'short', day:'nu
 const hm  = t => new Date(t*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 const clamp = (v,a,b) => v<a?a:(v>b?b:v);
 const byId = id => document.getElementById(id);
+/** A duration as render.secs writes it: 0.84s, 8.4s, 34s, 2m 05s, 1h 05m. */
+const secs = x => {
+  if(x == null) return '--';
+  if(x < 0.995) return x.toFixed(2)+'s';
+  if(x < 9.95) return x.toFixed(1)+'s';
+  if(x < 59.5) return x.toFixed(0)+'s';
+  const m = Math.floor(Math.round(x)/60), sc = Math.round(x) % 60;
+  return m < 60 ? `${m}m ${String(sc).padStart(2,'0')}s`
+                : `${Math.floor(m/60)}h ${String(m%60).padStart(2,'0')}m`;
+};
 
 const HOUR = 3600, DAY = 86400;
 
@@ -518,11 +528,13 @@ function drawRL(tk){
   marks(host, ()=>host.querySelector('svg'), [W, H], [L, 0, PLOT, H], mk, [L, T, PLOT, H-B-T]);
 }
 
-// ---- chart 2: daily input -------------------------------------------------------------
+// ---- chart 2: daily input, and response time by day ----------------------------------
 // The bars are rendered server-side in unit-x -- one unit is one local day -- so only the
-// group transform changes here.  Nothing vertical is ever touched.
-function drawDaily(tk){
-  const host = byId('dailychart');
+// group transform changes here.  Nothing vertical is ever touched.  Both bar charts take
+// this path: what a bar means is the server's business, where it sits is the viewport's.
+const BAR_CHARTS = ['dailychart', 'latchart'];
+function drawBars(id, tk){
+  const host = byId(id);
   if(!host) return;
   const svg = host.querySelector('svg');
   if(!svg) return;
@@ -741,7 +753,7 @@ function schedule(){
 function redraw(){
   const tk = VIEW ? ticks() : [];
   drawRL(tk);
-  drawDaily(tk);
+  BAR_CHARTS.forEach(id => drawBars(id, tk));
   schedulePies();
 }
 
@@ -934,7 +946,7 @@ function init(){
     return;
   }
   measure();
-  ['rlchart','dailychart'].forEach(id=>{ const el = byId(id); if(el) bind(el); });
+  ['rlchart'].concat(BAR_CHARTS).forEach(id=>{ const el = byId(id); if(el) bind(el); });
   addEventListener('wheel', e=>{                 // after the charts: whoever this one went to
     WHEEL.at = e.timeStamp || Date.now();
     if(!e.defaultPrevented) WHEEL.mode = 'page';
@@ -2443,11 +2455,13 @@ void main(){
   const TITLES = {
     windows: '',                                       // the time charts need no heading
     daily: '',
+    latency: '',
     content: 'What filled the window',
     models: TK ? 'Input by model' : 'Recorded input by model',
   };
   const NAMES = {ledger: 'The numbers', windows: 'Weekly limit windows', daily: 'Daily input',
-                 content: 'What filled the window', models: 'Input by model'};
+                 latency: 'Response time', content: 'What filled the window',
+                 models: 'Input by model'};
   function exhibits(){
     EX.length = 0;
     const panels = document.querySelectorAll('.wrap > .panel');
@@ -2458,6 +2472,7 @@ void main(){
     add('ledger', null, null);
     add('windows', byId('rlchart'), panels[0] || null);
     add('daily', byId('dailychart'), byId('dailychart') && byId('dailychart').closest('.panel'));
+    if(byId('latchart')) add('latency', byId('latchart'), byId('latchart').closest('.panel'));
     if(byId('catpie')) add('content', byId('catpie'), null);
     if(byId('modelpie')) add('models', byId('modelpie'), null);
   }
@@ -2496,12 +2511,12 @@ void main(){
       m = rec ? N3.windows(rec, {vmax: VMAX, wins: WINS, tk, view: VIEW, pw, title: TITLES.windows}, cx)
               : N3.empty(text((ex.panel || document).querySelector('.sub')) || 'No weekly-limit snapshots in range.',
                          {title: TITLES.windows, pw}, cx);
-    } else if(ex.key === 'daily'){
+    } else if(ex.key === 'daily' || ex.key === 'latency'){
       const svg = ex.host && ex.host.querySelector('svg');
-      m = rec ? N3.daily(rec, {peak: text(svg && svg.querySelector('.peak')), tk, view: VIEW, pw, title: TITLES.daily,
+      m = rec ? N3.daily(rec, {peak: text(svg && svg.querySelector('.peak')), tk, view: VIEW, pw, title: TITLES[ex.key],
                                legend: Array.from(ex.host.querySelectorAll('.legend span'), s => ({
                                  s: text(s), c: swatch(s)}))}, cx)
-              : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES.daily, pw}, cx);
+              : N3.empty(text(ex.host && ex.host.querySelector('.sub')) || 'No data in range.', {title: TITLES[ex.key], pw}, cx);
     } else {
       m = N3.medal(rec, {legend: legendOf(ex.host), hot: ex.hot, title: TITLES[ex.key]}, cx);
     }
@@ -2925,6 +2940,13 @@ void main(){
       return [at(`window opened ${t0 == null ? '--' : when(t0)}  ·  peak reported ${w.peak_pct == null ? '--' : w.peak_pct + '%'}`, 0, '--fg'),
               at(`${winInput(w)} over ${w.tokens.responses.toLocaleString()} responses  ·  uncached ${big(w.tokens.uncached)}`, 1, '--dim')];
     }
+    if(ex.key === 'latency'){
+      const r = (D.latency_days || []).find(q => q[0] === hit.day);
+      if(!r) return null;
+      return [at(`${day(hit.day)}  ·  median response ${secs(r[3])}  ·  p90 ${secs(r[4])}`, 0, '--fg'),
+              at((r[5] == null ? '' : `median time above the fastest pace ${secs(r[5])} (estimated)  ·  `)
+                 + `${r[2].toLocaleString()} timed responses`, 1, '--dim')];
+    }
     const row = (D.models.days || []).find(r => r[0] === hit.day);
     if(!row) return null;
     const tot = Object.values(row[2]).reduce((a, b) => a + b, 0);
@@ -3180,10 +3202,11 @@ DAILY_MODELS = 8        # models stacked in their own colour; the rest fold into
 def _domain(model):
     """The time span every chart on the page is drawn over, in unix seconds.
 
-    One domain for all three charts: the limit chart and the daily chart then place a moment
-    at the same x and can be read against each other, and the composition pie has a range to
-    be recomposed over.  It covers the limit series, the daily buckets and the content
-    buckets, so nothing the page can draw falls outside it.
+    One domain for every chart: the limit chart, the daily chart and the response-time chart
+    then place a moment at the same x and can be read against each other, and the
+    composition pie has a range to be recomposed over.  It covers the limit series, the daily
+    buckets, the response-time days and the content buckets, so nothing the page can draw
+    falls outside it.
     """
     lo = hi = None
 
@@ -3205,6 +3228,8 @@ def _domain(model):
             for p in (w.get('pct_points') or []):
                 seen(p[0])
     for d in (model.get('daily') or []):
+        seen(d.get('start'), d.get('end'))
+    for d in ((model.get('latency') or {}).get('daily') or []):
         seen(d.get('start'), d.get('end'))
     bucket = model.get('cat_bucket_s') or 3600
     for row in (model.get('cat_series') or []):
@@ -3306,6 +3331,78 @@ def _daily_svg(daily, order, domain, tiktoken=False):
             f'{sum(d[val] for d in undated):,} {"" if tiktoken else "recorded "}input, '
             f'are not drawn.</p>')
     return ''.join(parts) + f'<div class="legend">{legend}</div>{miss}'
+
+
+def _latency_svg(days, domain):
+    """Response time by day on the shared time axis: the median response, with the median
+    time above the pace capping it.
+
+    Drawn in unit x, like the daily input chart, so the page moves it with the same viewport
+    and the same code (`drawBars`).  The cap is a median of a different quantity, not a part
+    of the bar's sum: but time above the pace never exceeds a response's own time, so its
+    median never exceeds the median response, and the cap always fits inside the bar.  A day
+    with fewer than HOUR_MIN timed responses keeps its place and its tooltip and draws
+    nothing: one slow response is not a slow day.
+    """
+    dated = [d for d in days if d.get('start') is not None and d.get('end') is not None]
+    if not dated:
+        return '<p class="sub">No timed responses on a dated day in range.</p>'
+    W, L, R, T, B = CHART_W, CHART_L, CHART_R, DAILY_T, DAILY_B
+    H = LAT_H
+    t0, t1 = domain
+    span = (t1 - t0) or 1
+    px = lambda t: L + (t - t0) / span * (W - L - R)
+    drawn = lambda d: d['n'] >= HOUR_MIN and d.get('median_s') is not None
+    shown = [d for d in dated if drawn(d)]
+    mx = max((d['median_s'] for d in shown), default=0) or 1
+    above = any(d.get('median_above_s') is not None for d in shown)
+    parts = [f'<svg viewBox="0 0 {W} {H}" data-h="{H}" data-t="{T}" data-b="{B}" role="img" '
+             f'aria-label="median response time by day">',
+             f'<defs><clipPath id="tcclip-lat"><rect class="clip" x="{L}" y="0" '
+             f'width="{W-L-R}" height="{H}"/></clipPath></defs>',
+             '<g class="ax"></g>',
+             '<g class="bars" clip-path="url(#tcclip-lat)">']
+    for d in dated:
+        a, b = d['start'], d['end']
+        x, sx = px(a), max(px(b) - px(a), 0.001)
+        parts.append(f'<g class="bar" data-a="{int(a)}" data-b="{int(b)}" '
+                     f'transform="translate({x:.2f},0) scale({sx:.5f},1)">')
+        tip = f'{d["date"]}\n{d["n"]:,} timed responses'
+        if drawn(d):
+            med, ab = d['median_s'], d.get('median_above_s')
+            full = (med / mx) * (H - B - T)
+            cap = 0.0 if ab is None else min(full, (ab / mx) * (H - B - T))
+            # The work below, the time above the pace on top: the cap sits where the
+            # excess would, at the end of the response.
+            if full - cap > 0:
+                parts.append(f'<rect x="0.04" y="{H - B - (full - cap):.2f}" width="0.92" '
+                             f'height="{full - cap:.2f}" fill="var(--cached)" class="mk"></rect>')
+            if cap > 0:
+                parts.append(f'<rect x="0.04" y="{H - B - full:.2f}" width="0.92" '
+                             f'height="{cap:.2f}" fill="var(--uncached)" class="mk"></rect>')
+            tip += (f'\nmedian {_plain(secs(med))}, p90 {_plain(secs(d.get("p90_s")))}'
+                    + ('' if ab is None else
+                       f'\nmedian time above the pace* {_plain(secs(ab))}'))
+        else:
+            tip += '\ntoo few to show'
+        parts.append(f'<rect x="0" y="{T}" width="1" height="{H-T-B}" '
+                     f'fill="transparent"><title>{esc(tip)}</title></rect>')
+        parts.append('</g>')
+    parts.append('</g>')
+    parts.append(f'<line class="base" x1="{L}" y1="{H-B}" x2="{W-R}" y2="{H-B}" '
+                 f'stroke="var(--line)"/>')
+    parts.append(f'<text class="peak" x="{L}" y="{T-6}" fill="var(--dim)" font-size="11">'
+                 f'peak median response {_plain(secs(mx if shown else None))}/day</text>')
+    parts.append('</svg>')
+    legend = ('<span><i style="background:var(--cached)"></i>median response time</span>'
+              + ('<span><i style="background:var(--uncached)"></i>median time above the '
+                 'fastest pace* (estimated)</span>' if above else ''))
+    return ''.join(parts) + f'<div class="legend">{legend}</div>'
+
+
+def _plain(s):
+    """`secs` for text that is escaped later: its one entity, as the character itself."""
+    return s.replace('&mdash;', '—')
 
 
 # ---- the Matisse collage ------------------------------------------------------------------
@@ -3426,7 +3523,8 @@ def secs(x):
 
 LAT_GROUPS = 12         # model and effort rows in the latency table; the rest are in --json
 LAT_TOOLS = 10
-HOUR_MIN = 5            # an hour with fewer responses is left empty rather than drawn tall
+HOUR_MIN = 5            # an hour (or a day) with fewer responses is left empty, not drawn tall
+LAT_H = 190             # the response-time chart's height, in the same units as DAILY_H
 def _hours_chart(hours, above):
     """Median per local hour of the day, one column each: time above the pace when `above`,
     else the response time itself (no model had enough responses for a line).
@@ -3553,7 +3651,8 @@ def _latency_panel(lat, public=False):
 
 
 def render(model, public=False, style=None):
-    """The page: the headline numbers, three charts over one shared, zoomable range, and a
+    """The page: the headline numbers, three time charts over one shared, zoomable range
+    (limit windows, daily input, response time by day), the composition pies, and a
     response-time panel below them.
 
     Everything else the model carries -- sessions, reconciliation, images, the window table,
@@ -3602,6 +3701,12 @@ def render(model, public=False, style=None):
         top_note = '' if public else ' &middot; '.join(html.escape(x) for x in
                                                        (str(top['session_id'])[:8], where) if x)
         top_tile = [tile('Longest session', big(top[shown]), top_note)]
+
+    # The third time chart: response time by day, on the same axis as the other two.  None
+    # at all when nothing was timed -- the panel below says why.
+    lat_chart = (f'<div class="panel"><div class="chart" id="latchart">'
+                 f'{_latency_svg((model.get("latency") or {}).get("daily") or [], domain or [0, 1])}'
+                 f'</div></div>\n' if (model.get('latency') or {}).get('available') else '')
 
     # A tile, not only the panel: the tiles are what every style draws, the 3D one included.
     lat = model.get('latency') or {}
@@ -3665,6 +3770,12 @@ def render(model, public=False, style=None):
         # Which input the charts draw: 'tiktoken' or 'recorded' (Codex's).  Labels follow it.
         'input_source': t.get('input_source') or 'recorded',
         # The daily chart's own ranking and cap, so the model pie colours match its bars.
+        # The response-time chart's days, for the 3D scene's tooltip: [start, end, timed
+        # responses, median, p90, median above the pace].
+        'latency_days': [[d['start'], d['end'], d['n'], d.get('median_s'), d.get('p90_s'),
+                          d.get('median_above_s')]
+                         for d in (lat.get('daily') or [])
+                         if d.get('start') is not None and d.get('end') is not None],
         'models': {
             'order': [m['model'] for m in model['models'] if m['model']][:DAILY_MODELS],
             'days': [[d['start'], d['end'], d.get('tiktoken_models' if tk else 'models') or {}]
@@ -3705,6 +3816,7 @@ def render(model, public=False, style=None):
     model['daily'], [m['model'] for m in model['models']], domain or [0, 1],
     tiktoken=tk)}</div></div>
 
+{lat_chart}
 <div class="panel pies"><div id="catpie"></div><div id="modelpie"></div></div>
 
 {_latency_panel(lat, public=public)}

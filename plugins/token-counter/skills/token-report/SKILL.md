@@ -137,14 +137,15 @@ Quoting the reported percentage and the reset times is fine; those are recorded 
 Five headline numbers — input (counted with tiktoken), output, cache hit, sessions, and the
 weekly limit as the server's own reported percentage — plus the longest session, and three
 charts: a cumulative token curve per weekly limit window with the reported percentage
-overlaid; daily input stacked by the model that was charged for it; and content composition
-by category. Below them, a response-time panel: per model and effort, the median and p90
+overlaid; daily input stacked by the model that was charged for it; response time by day
+(the median response, capped by the estimated median time above the fastest pace); and
+content composition by category. Below them, a response-time panel: per model and effort, the median and p90
 response time with the estimated overhead, output rate and share above the pace; the median
 time above the pace by hour of the day; turn time; and time per tool. The median response
 time is also a tile.
 
-The two time charts share one axis, so a day in one is the same x in the other. Scrolling,
-dragging or pinching either chart zooms and pans both — horizontally only, the value axes do
+The three time charts share one axis, so a day in one is the same x in the others.
+Scrolling, dragging or pinching any of them zooms and pans all three — horizontally only, the value axes do
 not move — and the composition chart recomposes over whatever range is on screen. It works
 the same on a phone; the toolbar above the charts has zoom and reset buttons either way.
 

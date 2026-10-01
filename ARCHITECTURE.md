@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  226 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  238 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -1065,7 +1065,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 226 cases
+│   ├── test_pipeline.py                  # §3–§7, 238 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1204,7 +1204,7 @@ Single self-contained HTML, dark/light, no external requests — **151 KB** over
 of vanilla JS over an embedded JSON blob. A test asserts the output contains no `http://` or
 `https://` reference at all.
 
-Five headline numbers and three charts. Everything else the model carries — sessions,
+The headline numbers and four charts. Everything else the model carries — sessions,
 reconciliation, images, the window table, the data-quality counters — is reported through
 `--json` and the stdout summary, not here (rev 12).
 
@@ -1214,11 +1214,18 @@ reconciliation, images, the window table, the data-quality counters — is repor
 2. **Cumulative tokens per weekly limit window** — tiktoken input plus Codex's output,
    restarting at zero at every reset, with the reported percentage overlaid (§5.6)
 3. **Daily input**, stacked by the model that was charged for it
-4. **What filled the window** — independently tokenized content, by category
-5. **Response time** (§5.8) — per model and effort, the median and p90 with the estimated
-   overhead, output rate and share above the pace; the median time above the pace by hour
-   of the day; turn time and the model's share of it; and tool time by tool. It has no time
-   axis, so it sits below the three charts and outside the shared viewport. It is a tile and
+4. **Response time by day** (§5.8) — the median response, capped by the median time above
+   the fastest pace (estimated, and labelled so). A third chart on the shared time axis
+   (§7.1), drawn in unit x like the daily input and moved by the same code. The cap is the
+   median of a different quantity, not part of the bar's sum, but time above the pace never
+   exceeds a response's own time, so its median never exceeds the median response and the
+   cap always fits. A day with fewer than five timed responses keeps its place and tooltip
+   and draws nothing. Nocturne shows it as a sixth exhibit, built by the daily chart's solid.
+5. **What filled the window** — independently tokenized content, by category
+6. **The response-time panel** (§5.8) — per model and effort, the median and p90 with the
+   estimated overhead, output rate and share above the pace; the median time above the pace
+   by hour of the day; turn time and the model's share of it; and tool time by tool. It has
+   no time axis, so it sits below the charts and outside the shared viewport. It is a tile and
    a panel because the tiles are what every style draws: Nocturne's 3D scene shows the tile
    and not the panel, which is still on its flat sheet for assistive tech. The hour chart is
    CSS columns rather than SVG, so its labels keep their size on a phone.
@@ -1340,15 +1347,16 @@ sparks fall, and nothing is drawn between changes.
 
 ### 7.1 One time axis, one viewport
 
-Charts 2 and 3 answer different questions about the same hours, and are only useful together
-if a moment can be found in both. They are drawn over **one domain**, at one viewBox width,
-with one pair of margins, and they carry the same ticks — generated once per redraw and
-handed to both — so a date sits at the same x in each and a spike in one can be traced to a
-day in the other. The domain covers the limit series, the daily buckets and the content
-buckets, so nothing the page can draw falls outside it.
+Charts 2, 3 and 4 answer different questions about the same hours, and are only useful
+together if a moment can be found in each. They are drawn over **one domain**, at one viewBox
+width, with one pair of margins, and they carry the same ticks — generated once per redraw
+and handed to all three — so a date sits at the same x in each and a spike in one (a slow
+day) can be traced to the others (the usage that day, the limit it spent). The domain covers
+the limit series, the daily buckets, the response-time days and the content buckets, so
+nothing the page can draw falls outside it.
 
-The viewport is shared. Scrolling, dragging or pinching **either** chart moves both, and a
-double-click on either returns both to the full range. Wheel zoom and the double-click
+The viewport is shared. Scrolling, dragging or pinching **any** of them moves all three, and
+a double-click on one returns them all to the full range. Wheel zoom and the double-click
 **glide** rather than jump, in every style: the view eases toward its goal over about a
 quarter of a second, as a true zoom -- the moment that sits at the same x in the view it
 leaves and the view it reaches stays put the whole way, and the span changes geometrically --
@@ -1367,7 +1375,7 @@ only.** Each chart's value axis is fixed over the corpus, never over the viewpor
 height and a curve's height mean the same thing at every zoom level; rescaling y to the
 visible slice would make two views of the same chart quietly incomparable.
 
-Chart 4 has no time axis of its own, so it follows the viewport by filtering. Tokenized
+Chart 5 has no time axis of its own, so it follows the viewport by filtering. Tokenized
 content is deduplicated **per rollout file** (§3.3), which makes the file the finest unit its
 categories can honestly be placed on: `analyze` buckets each file's categories at the hour
 the file opened (`CAT_BUCKET_S`), and a bucket counts when it overlaps the visible range.
@@ -1524,6 +1532,17 @@ Structural, not deferred work.
 ---
 
 ## 10. Revision history
+
+**Rev 19** — response time by day, on the shared time axis (§7, §7.1).
+
+| Change | Cause |
+| --- | --- |
+| A response-time chart under the daily input: the median response per day, capped by the median time above the pace | Requested: response time was a tile and a table, with no way to see a slow day against the usage and the limit around it |
+| Rendered in unit x by `_latency_svg` and moved by `drawBars`, which both bar charts now share | One code path for "where a day sits", so the two can never disagree about a date; the page test asserts every response-time bar carries its daily-input twin's transform at full extent, zoomed, and on a phone |
+| Days come with `analyze._day_span` spans, a p90, and a row each in the page payload | The spans are the daily bars' own, DST handling included; the payload feeds the 3D scene's tooltip |
+| A day under five timed responses draws nothing | One slow response is not a slow day, and it would set the chart's scale |
+| `test_page.js` builds each bar chart's stub from its own markup | It took every bar after `id="dailychart"`, so the new chart's bars would have been read as daily input |
+| The page fixture gives the response-time days enough responses to draw | The shared fixture times one response a day, which draws no bar and would leave the shared-axis checks nothing to move |
 
 **Rev 18** — response time, turn time and tool time (§5.8). Plugin 1.5.0.
 
@@ -1791,8 +1810,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
 | `scripts/test_mutations.py` | **29/29** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **226/226** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
-| `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
+| `scripts/test_pipeline.py` | **238/238** across tokenizer, installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
+| `node scripts/test_page.js` | **50/50** on the page's own embedded script: shared ticks across all three time charts, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |
 | `scripts/diag_fork.py` | the known fork pair matches for exactly **37 records at parent index 95** — an independent witness for the §2.5 rule |

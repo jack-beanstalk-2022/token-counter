@@ -392,6 +392,7 @@ def build(files, charged, tz=None):
                    'median_above_s': _r(_pct(sorted(v[1]), .5))}
                   for h, v in sorted(hours.items())],
         'daily': [{'date': k, 'n': len(v[0]), 'median_s': _r(_pct(sorted(v[0]), .5)),
+                   'p90_s': _r(_pct(sorted(v[0]), .9)),
                    'median_above_s': _r(_pct(sorted(v[1]), .5))}
                   for k, v in sorted(days.items())],
         'turns': dict(_summary(turn_vals), model_s=_r(turn_model),

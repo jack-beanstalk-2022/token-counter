@@ -693,6 +693,10 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
     # the data-quality set, so a sample left out is counted where the report can see it.
     lat, lat_q = latency.build(files, charged)
     quality.update(lat_q)
+    # The same local-midnight spans the daily bars carry, so the response-time chart sits on
+    # the shared time axis without re-deriving them (and their DST handling) in the page.
+    for d in (lat.get('daily') or []):
+        d['start'], d['end'] = _day_span(d['date'])
 
     inp, cch = totals['input'], totals['cached']
     uniq = totals['unique_tokens'] or 0

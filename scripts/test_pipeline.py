@@ -1940,6 +1940,79 @@ def test_latency_render():
               '&mdash;'])
 
 
+def test_latency_chart():
+    """Response time by day is a third chart on the shared time axis: its bars sit on the
+    daily chart's local-day spans, the time above the pace caps the median and fits inside
+    it, a thin day keeps its place and draws nothing, and nothing timed means no chart."""
+    d = tempfile.mkdtemp()
+    _write(d, 'rollout-lat.jsonl', _timed_session(LAT_T0))
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    model = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    days = model['latency']['daily']
+    check('each response-time day carries the local-day span the daily bars use',
+          all(dd['start'] == analyze._day_span(dd['date'])[0]
+              and dd['end'] == analyze._day_span(dd['date'])[1] for dd in days) and days,
+          str(days))
+    html = render.render(model)
+    check('the chart sits right after the daily chart, before the pies',
+          html.index('id="dailychart"') < html.index('id="latchart"') < html.index('id="catpie"'))
+    chart = html.split('id="latchart"')[1].split('id="catpie"')[0]
+    check('a day with enough timed responses is drawn on the page',
+          days[0]['n'] >= render.HOUR_MIN and chart.count('class="mk"') >= 1, str(days))
+    thin = render._latency_svg([dict(days[0], n=render.HOUR_MIN - 1)],
+                               [days[0]['start'], days[0]['end']])
+    check('a day with too few timed responses keeps its place and draws nothing',
+          'too few to show' in thin and 'class="mk"' not in thin
+          and 'data-a="%d"' % int(days[0]['start']) in thin, '')
+
+    # Enough responses a day, with a pace line: both segments, and the cap inside the bar.
+    rows = _pace_corpus(n=400)
+    files = {'a': {'turn_starts': [r['req_ts'] for r in rows], 'tool_times': []}}
+    lat, _ = latency.build(files, {'a': rows}, tz=datetime.timezone.utc)
+    for dd in lat['daily']:
+        dd['start'], dd['end'] = analyze._day_span(dd['date'], tz=datetime.timezone.utc)
+    dom = [lat['daily'][0]['start'], lat['daily'][-1]['end']]
+    svg = render._latency_svg(lat['daily'], dom)
+    segs = re.findall(r'<g class="bar" data-a="(\d+)"[^>]*>(.*?)</g>', svg, re.S)
+    drawn = [(a, re.findall(r'y="([\d.]+)" width="0.92" height="([\d.]+)" fill="var\(--(\w+)\)"', g))
+             for a, g in segs]
+    full = [x for x in drawn if len(x[1]) == 2]
+    check('a drawn day is the median response, capped by the time above the pace',
+          full and all(r[0][2] == 'cached' and r[1][2] == 'uncached' for _, r in full), str(drawn[:2]))
+    check('the cap sits on top of the bar and inside it',
+          full and all(abs(float(r[1][0]) + float(r[1][1]) - float(r[0][0])) < .02 for _, r in full)
+          and all(float(r[1][0]) >= render.DAILY_T - .01 for _, r in full), str(full[:2]))
+    by = {dd['date']: dd for dd in lat['daily']}
+    tips = re.findall(r'<title>([^<]*)</title>', svg)
+    check('each day says its median, p90 and time above the pace, as an estimate',
+          len(tips) == len(lat['daily']) >= 2
+          and all('median time above the pace*' in t and ', p90 ' in t for t in tips), str(tips))
+    check('the chart names both series, the estimate marked as one',
+          'median response time' in svg and 'fastest pace* (estimated)' in svg
+          and svg.count('clipPath id="tcclip-lat"') == 1, '')
+    check('a day is placed at its local-day span',
+          len(segs) == len(by) >= 2
+          and all(int(a) == int(by[dd]['start']) for (a, _), dd in zip(segs, sorted(by))),
+          str([a for a, _ in segs]))
+
+    # The page's payload carries the days, for the 3D scene's tooltip, and the domain covers them.
+    m2 = dict(model, latency=dict(model['latency'], daily=lat['daily']))
+    page = render.render(m2)
+    payload = json.loads(re.search(r'window.__TC__ = (\{.*?\});</script>', page).group(1)
+                         .replace('\\u003c', '<').replace('\\u003e', '>').replace('\\u0026', '&'))
+    check('the payload carries each response-time day for the scene',
+          len(payload['latency_days']) == len(lat['daily'])
+          and payload['latency_days'][0][:3] == [lat['daily'][0]['start'], lat['daily'][0]['end'],
+                                                  lat['daily'][0]['n']], str(payload['latency_days'][:1]))
+    dm = render._domain(m2)
+    check('one domain covers the response-time days too',
+          dm[0] <= lat['daily'][0]['start'] and dm[1] >= lat['daily'][-1]['end'], str(dm))
+    none = render.render(dict(model, latency={'available': False, 'reason': 'none here'}))
+    check('nothing timed: no response-time chart at all', 'id="latchart"' not in none
+          and '"latency_days":[]' in none, '')
+
+
 # --------------------------------------------------------------- account and rate limits
 
 def _jwt(claims):
@@ -2268,7 +2341,14 @@ def axis_model():
 
 
 def page_fixture():
-    return render.render(axis_model())
+    model = axis_model()
+    # The corpus times one response a day, and a day needs HOUR_MIN to draw a bar in the
+    # response-time chart; the page test needs bars to move.  Same days, same spans, more
+    # responses -- and a time above the pace, so both segments are drawn.
+    model['latency']['daily'] = [
+        dict(d, n=render.HOUR_MIN + 7, median_s=20.0 + i, p90_s=45.0, median_above_s=2.0 + i)
+        for i, d in enumerate(model['latency']['daily'])]
+    return render.render(model)
 
 
 def test_shared_time_axis():
@@ -2395,6 +2475,7 @@ def main():
     test_pace_split()
     test_latency_caps_and_counters()
     test_latency_render()
+    test_latency_chart()
     test_rate_limit_windows()
     test_cumulative_curve_is_monotonic()
     test_account_and_limits_render()
