@@ -220,7 +220,7 @@ machine you are on.
 ```
 python scripts/fetch_vocab.py --verify   # vendored tokenizer parity with stock o200k_base
 python scripts/test_ledger.py            # 13 response-identity regressions
-python scripts/test_pipeline.py          # 230 pipeline assertions
+python scripts/test_pipeline.py          # 231 pipeline assertions
 python scripts/test_mutations.py         # every fix must fail when reverted
 python scripts/test_share.py             # the share payload, its privacy and its transport
 python scripts/bench.py                  # the parallelism grid

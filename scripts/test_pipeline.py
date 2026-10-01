@@ -113,7 +113,10 @@ def test_vocabulary_read_from_the_file():
     second = os.path.join(d, 'second.tiktoken')
     with open(second, 'wb') as fh:
         fh.write(blob)
-    encoding.load(second)
+    try:
+        encoding.load(second)
+    except Exception:
+        pass                    # the check below still has to see the damage
     encoding.load.cache_clear()
     with open(second, 'wb') as fh:
         fh.write(b''.join(blob.splitlines(keepends=True)[:1000]))
@@ -138,6 +141,27 @@ def test_vocabulary_read_from_the_file():
     except ValueError as exc:
         check('a malformed vocabulary line is rejected, with its line number',
               'could not be parsed' in str(exc) and 'line 6 ' in str(exc), str(exc)[:200])
+    finally:
+        encoding.load.cache_clear()
+
+    # Cut off inside the last rank: "<token> 199997" becomes "<token> 19", a rank given
+    # earlier.  tiktoken panics on a repeated rank with an exception that is not an
+    # Exception, so it has to be refused before tiktoken sees it.  (A Windows checkout
+    # turned `blob[:-40]` in the cache-key test into exactly this.)
+    cut = os.path.join(d, 'cut.tiktoken')
+    token, rank = lines[-1].split()
+    with open(cut, 'wb') as fh:
+        fh.write(b''.join(lines[:-1]) + token + b' ' + rank[:2])
+    name = 'a vocabulary cut off inside a rank is rejected, not handed to tiktoken'
+    try:
+        encoding.load(cut)
+        check(name, False, 'no exception raised')
+    except ValueError as exc:
+        check(name, 'repeats' in str(exc), str(exc)[:200])
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as exc:
+        check(name, False, f'{exc.__class__.__name__}: {str(exc)[:200]}')
     finally:
         encoding.load.cache_clear()
 

@@ -349,6 +349,38 @@ def _tiktoken_loader():
     return undo
 
 
+@case('a vocabulary with a repeated rank is handed to tiktoken',
+      lambda: tp.test_vocabulary_read_from_the_file())
+def _repeated_rank():
+    # read_ranks without its duplicate check: tiktoken then panics on a truncated rank.
+    import base64
+    from tokencounter import encoding as tcenc
+    orig = tcenc.read_ranks
+
+    def unchecked(path):
+        with open(path, 'rb') as fh:
+            contents = fh.read()
+        ranks = {}
+        for n, line in enumerate(contents.splitlines(), 1):
+            if not line:
+                continue
+            try:
+                token, rank = line.split()
+                ranks[base64.b64decode(token)] = int(rank)
+            except Exception as exc:
+                raise ValueError(f'line {n} is not "<base64 token> <rank>": '
+                                 f'{line[:60]!r}') from exc
+        return ranks
+
+    tcenc.read_ranks = unchecked
+    tcenc.load.cache_clear()
+
+    def undo():
+        tcenc.read_ranks = orig
+        tcenc.load.cache_clear()
+    return undo
+
+
 @case('input shown as Codex recorded it, though the run counted it with tiktoken',
       lambda: tp.test_input_counted_with_tiktoken())
 def _recorded_input():

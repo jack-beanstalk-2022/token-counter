@@ -47,7 +47,7 @@ Reproduce with:
 ```
 python scripts/fetch_vocab.py --verify     # §4  vendored tokenizer parity
 python scripts/test_ledger.py              # §2  13 response-identity regressions
-python scripts/test_pipeline.py            # §3–§7  230 pipeline assertions
+python scripts/test_pipeline.py            # §3–§7  231 pipeline assertions
 python scripts/test_mutations.py           # §11 every fix fails when reverted
 python scripts/bench.py                    # §3.4  the parallelism grid
 python scripts/verify_schema.py            # §2.2, §2.3 schema claims
@@ -514,9 +514,10 @@ enc = Encoding(name="o200k_base_vendored", pat_str=O200K_PAT,
                special_tokens={"<|endoftext|>": 199999, "<|endofprompt|>": 200018})
 ```
 
-`read_ranks` parses the `.tiktoken` format (`base64(token) rank`, one pair per line) exactly
-as `tiktoken.load.load_tiktoken_bpe` does, and `scripts/test_pipeline.py` checks the two agree.
-That loader is not called, for two reasons (Rev 19):
+`read_ranks` parses the `.tiktoken` format (`base64(token) rank`, one pair per line) as
+`tiktoken.load.load_tiktoken_bpe` does, and `scripts/test_pipeline.py` checks the two agree. It
+also refuses a repeated token or rank, which tiktoken would panic on with an exception that is
+not an `Exception`. That loader is not called, for two reasons (Rev 19):
 
 - **It does not read the file.** It reads through `read_file_cached`, which copies any path
   it is given into `$TMPDIR/data-gym-cache/<sha1(path)>` and serves that copy from then on,
@@ -1078,7 +1079,7 @@ tokenCounter/
 │   ├── verify_schema.py                  # §2.2, §2.3 claims
 │   ├── verify_install.py                 # installed copy == this code
 │   ├── test_ledger.py                    # §2.5 response identity, 13 cases
-│   ├── test_pipeline.py                  # §3–§7, 230 cases
+│   ├── test_pipeline.py                  # §3–§7, 231 cases
 │   ├── test_mutations.py                 # every fix must fail when reverted
 │   ├── test_share.py                     # §6.1 payload, privacy, transport
 │   └── ref_bpe.py                        # §4 correctness oracle
@@ -1545,6 +1546,8 @@ Structural, not deferred work.
 | `encoding.read_ranks` parses the vendored `.tiktoken` file; `encoding.load` no longer imports `tiktoken.load` | Found by running the suites on Python 3.8, which the README promises: tiktoken 0.7.0, the last release for 3.8, cannot read a local path without `blobfile`, so a 3.8 run had no tokenizer. Four `test_pipeline.py` cases fail there. The report itself only looked right where a newer tiktoken had already left the vendored file in `/tmp` |
 | The same change stops the vocabulary being served from `$TMPDIR/data-gym-cache` | Newer tiktoken caches any path it reads under `sha1(path)` and never checks the copy against the file, so a vocabulary damaged in place loaded as it was before. Reproduced: with the old loader, a vendored file cut to 1,000 lines still loaded 200,019 ranks |
 | `test_vocabulary_read_from_the_file`, with a mutation case restoring `load_tiktoken_bpe` | It fails with the fix reverted on every Python, not only 3.8: it makes `tiktoken.load.read_file` raise as 0.7.0's does, damages a loaded vocabulary in place, and checks that the parsed ranks equal tiktoken's own |
+| `read_ranks` refuses a repeated token or rank, with a mutation case removing the check | Found by the first Windows CI run: the checkout turns the vendored file to CRLF, so `test_extractor_version_tracks_source`'s `blob[:-40]` ended inside a rank (`<token> 19`) instead of inside a token. tiktoken panicked on the repeated rank with a `pyo3_runtime.PanicException`, which is a `BaseException`, so `_extractor_version`'s "unusable tokenizer: never reuse" `except Exception` let it through and the run crashed. The new check in `test_vocabulary_read_from_the_file` cuts a rank on every platform |
+| `test_share.py` compares the page sent with the file's bytes | Also Windows only: the report writes the page in text mode, so the file holds CRLF and `share.py` sends it as it is, while the test read it back in text mode as LF. The page sent was the page on disk all along |
 | `scripts/ref_bpe.py` reads the ranks through `read_ranks` | It promised to work offline "like everything else", and on 3.8 it could not |
 | `.github/workflows/ci.yml`: the four test scripts and `test_page.js` on Ubuntu and Windows, Python 3.8 and 3.14, on every pull request and push to `main`; `fetch_vocab.py --verify` and a manifest check beside them | The suites ran only when someone ran them, and never on the 3.8 the README promises, which is how the loader defect above shipped. The job stops unless `tiktoken` imports, because `test_mutations.py` counts a target's `ImportError` as a caught mutation: without `tiktoken` it reported 29/29, 19 of them caught by nothing but the missing import. `--verify` must print its parity line, since it exits 0 when it cannot download the reference. The manifest check holds `share.py`'s client version to `plugin.json`'s, which drifted once (Rev 17) |
 
@@ -1813,8 +1816,8 @@ Built, installed and verified as `token-counter@jack-beanstalk-2022` on Codex CL
 | Check | Result |
 | --- | --- |
 | `scripts/test_ledger.py` | **13/13** response-identity regressions, including both round-3 counterexamples, the round-4 compaction case, cross-file `response_id` replay and the round-6 sibling counterexample |
-| `scripts/test_mutations.py` | **30/30** historical defects reverted, each caught by the test named for it |
-| `scripts/test_pipeline.py` | **230/230** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
+| `scripts/test_mutations.py` | **31/31** historical defects reverted, each caught by the test named for it |
+| `scripts/test_pipeline.py` | **231/231** across tokenizer (the vocabulary parsed from its own file, on Python 3.8 too), installing `tiktoken` on first use, input counted with tiktoken, classification, images, attribution, prompt reconstruction, windowed ledger scope, cache-key derivation, the index end to end (archiving, `--rebuild` against a held file), damage counting, rate-limit windows, cumulative-curve monotonicity, day spans across clock changes, account identity, failure modes, output escaping, the renderer and its three styles (Nocturne's validated palette pinned), the shared time axis the three charts are drawn on, and response, turn and tool time with the pace estimate (§5.8) |
 | `node scripts/test_page.js` | **46/46** on the page's own embedded script: shared ticks, shared viewport, x-only zoom, drag distance, clamping, the pie recomposing with the range, and the Nocturne scene's solids and stage built from the same marks |
 | `scripts/fetch_vocab.py --verify` | sha256 `446a9538...`, 200,019 ranks, token-identical to stock `o200k_base` |
 | Offline tokenizer | builds and encodes with `socket.socket` hard-blocked in a fresh process |

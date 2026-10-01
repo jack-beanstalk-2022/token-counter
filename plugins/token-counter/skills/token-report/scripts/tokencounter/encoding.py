@@ -55,14 +55,21 @@ def read_ranks(path):
     with open(path, 'rb') as fh:
         contents = fh.read()
     ranks = {}
+    seen = set()
     for n, line in enumerate(contents.splitlines(), 1):
         if not line:
             continue
         try:
             token, rank = line.split()
-            ranks[base64.b64decode(token)] = int(rank)
+            token, rank = base64.b64decode(token), int(rank)
         except Exception as exc:
             raise ValueError(f'line {n} is not "<base64 token> <rank>": {line[:60]!r}') from exc
+        # A file cut off inside a rank ("... 19") repeats an earlier rank.  tiktoken panics
+        # on that with a pyo3 PanicException, which `except Exception` does not catch.
+        if token in ranks or rank in seen:
+            raise ValueError(f'line {n} repeats a token or rank given earlier: {line[:60]!r}')
+        ranks[token] = rank
+        seen.add(rank)
     return ranks
 
 
