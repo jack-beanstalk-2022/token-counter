@@ -75,6 +75,116 @@ def test_encoding_cached():
     check('encoding is cached per process', a is b)
 
 
+def test_vocabulary_read_from_the_file():
+    """The vocabulary is parsed from the file on every load, never through `tiktoken.load`.
+
+    Under tiktoken 0.7.0, the last release for Python 3.8, `tiktoken.load.read_file` raises
+    for any local path unless `blobfile` is installed, so loading through it left 3.8 with no
+    tokenizer.  Newer releases read through `read_file_cached`, which keeps a copy in
+    `$TMPDIR/data-gym-cache` keyed by path and serves it without looking at the file again.
+    """
+    import tiktoken.load
+    d = tempfile.mkdtemp()
+    with open(encoding.vendor_path(), 'rb') as fh:
+        blob = fh.read()
+
+    def no_blobfile(path):
+        # What 0.7.0's `read_file` does with a local path when `blobfile` is not installed.
+        raise ImportError('blobfile is not installed. Please install it by running '
+                          '`pip install blobfile`.')
+
+    first = os.path.join(d, 'first.tiktoken')
+    with open(first, 'wb') as fh:
+        fh.write(blob)
+    orig = tiktoken.load.read_file
+    tiktoken.load.read_file = no_blobfile
+    try:
+        got = encoding.load(first).n_vocab
+    except Exception as exc:
+        got = f'{exc.__class__.__name__}: {str(exc)[:200]}'
+    finally:
+        tiktoken.load.read_file = orig
+        encoding.load.cache_clear()
+    check('the vocabulary loads where tiktoken.load cannot read a local file (tiktoken 0.7.0)',
+          got == 200019, str(got))
+
+    # One run loads it, the file is then damaged in place, and the next run must see the
+    # damage.  `cache_clear` stands in for the new process.
+    second = os.path.join(d, 'second.tiktoken')
+    with open(second, 'wb') as fh:
+        fh.write(blob)
+    try:
+        encoding.load(second)
+    except Exception:
+        pass                    # the check below still has to see the damage
+    encoding.load.cache_clear()
+    with open(second, 'wb') as fh:
+        fh.write(b''.join(blob.splitlines(keepends=True)[:1000]))
+    try:
+        encoding.load(second)
+        check('a vocabulary damaged in place is read again, not served from a copy', False,
+              'loaded without error: the ranks came from somewhere other than the file')
+    except ValueError as exc:
+        check('a vocabulary damaged in place is read again, not served from a copy',
+              'ranks' in str(exc), str(exc)[:200])
+    finally:
+        encoding.load.cache_clear()
+
+    bad = os.path.join(d, 'bad.tiktoken')
+    lines = blob.splitlines(keepends=True)
+    with open(bad, 'wb') as fh:
+        fh.write(b''.join(lines[:5] + [b'not-a-rank-line\n'] + lines[5:]))
+    try:
+        encoding.load(bad)
+        check('a malformed vocabulary line is rejected, with its line number', False,
+              'no exception raised')
+    except ValueError as exc:
+        check('a malformed vocabulary line is rejected, with its line number',
+              'could not be parsed' in str(exc) and 'line 6 ' in str(exc), str(exc)[:200])
+    finally:
+        encoding.load.cache_clear()
+
+    # Cut off inside the last rank: "<token> 199997" becomes "<token> 19", a rank given
+    # earlier.  tiktoken panics on a repeated rank with an exception that is not an
+    # Exception, so it has to be refused before tiktoken sees it.  (A Windows checkout
+    # turned `blob[:-40]` in the cache-key test into exactly this.)
+    cut = os.path.join(d, 'cut.tiktoken')
+    token, rank = lines[-1].split()
+    with open(cut, 'wb') as fh:
+        fh.write(b''.join(lines[:-1]) + token + b' ' + rank[:2])
+    name = 'a vocabulary cut off inside a rank is rejected, not handed to tiktoken'
+    try:
+        encoding.load(cut)
+        check(name, False, 'no exception raised')
+    except ValueError as exc:
+        check(name, 'repeats' in str(exc), str(exc)[:200])
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as exc:
+        check(name, False, f'{exc.__class__.__name__}: {str(exc)[:200]}')
+    finally:
+        encoding.load.cache_clear()
+
+    # Same ranks as tiktoken's own loader, where that loader can read a local file at all.
+    keep = os.environ.get('TIKTOKEN_CACHE_DIR')
+    os.environ['TIKTOKEN_CACHE_DIR'] = ''              # tiktoken: '' turns its cache off
+    try:
+        ref = tiktoken.load.load_tiktoken_bpe(encoding.vendor_path())
+    except Exception as exc:
+        ref = exc
+    finally:
+        if keep is None:
+            os.environ.pop('TIKTOKEN_CACHE_DIR')
+        else:
+            os.environ['TIKTOKEN_CACHE_DIR'] = keep
+    if isinstance(ref, Exception):
+        check('ranks identical to tiktoken.load.load_tiktoken_bpe', True,
+              f'reference unavailable: {ref.__class__.__name__} (skipped)')
+    else:
+        check('ranks identical to tiktoken.load.load_tiktoken_bpe',
+              encoding.read_ranks(encoding.vendor_path()) == ref, 'ranks differ')
+
+
 # --------------------------------------------------------------------------- images
 
 def _png(w, h):
@@ -2361,6 +2471,7 @@ def test_shared_time_axis():
 def main():
     test_offline_tokenizer()
     test_encoding_cached()
+    test_vocabulary_read_from_the_file()
     test_images()
     test_classify()
     test_worker_attribution()

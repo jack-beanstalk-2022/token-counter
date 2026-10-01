@@ -5,8 +5,14 @@ derives its cache filename from ``sha1(vocab_url)``, so a human-readable asset n
 found and tiktoken silently falls through to a network fetch that fails under a restricted
 sandbox. We read the vendored file directly and construct the ``Encoding`` ourselves.
 
+"Directly" means without ``tiktoken.load`` at all (``read_ranks``): its loader copies every
+file it reads into ``$TMPDIR/data-gym-cache`` under ``sha1(path)`` and serves that copy from
+then on, and tiktoken 0.7.0 -- the last release for Python 3.8 -- cannot read a local path
+without the ``blobfile`` package.
+
 See ARCHITECTURE.md section 4.
 """
+import base64
 import functools
 import os
 
@@ -38,12 +44,40 @@ MIN_RANKS = 190_000          # o200k_base has 199,998 mergeable ranks; anything 
 #                              this means a truncated or corrupt vendored blob.
 
 
+def read_ranks(path):
+    """The mergeable ranks in a ``.tiktoken`` file: one ``base64(token) rank`` pair per line.
+
+    Parsed the way ``tiktoken.load.load_tiktoken_bpe`` parses it, from the file itself on
+    every call.  That loader is not used: it reads through a cache that is keyed by path and
+    never checked against the file, so a vocabulary changed in place keeps loading as it was,
+    and under tiktoken 0.7.0 it raises for any local path unless ``blobfile`` is installed.
+    """
+    with open(path, 'rb') as fh:
+        contents = fh.read()
+    ranks = {}
+    seen = set()
+    for n, line in enumerate(contents.splitlines(), 1):
+        if not line:
+            continue
+        try:
+            token, rank = line.split()
+            token, rank = base64.b64decode(token), int(rank)
+        except Exception as exc:
+            raise ValueError(f'line {n} is not "<base64 token> <rank>": {line[:60]!r}') from exc
+        # A file cut off inside a rank ("... 19") repeats an earlier rank.  tiktoken panics
+        # on that with a pyo3 PanicException, which `except Exception` does not catch.
+        if token in ranks or rank in seen:
+            raise ValueError(f'line {n} repeats a token or rank given earlier: {line[:60]!r}')
+        ranks[token] = rank
+        seen.add(rank)
+    return ranks
+
+
 @functools.lru_cache(maxsize=2)
 def load(path=None):
     """Build the encoding. Cached per process; costs ~0.3s on first call."""
     try:
         from tiktoken import Encoding
-        from tiktoken.load import load_tiktoken_bpe
     except ImportError as exc:                      # pragma: no cover - environment issue
         raise ImportError(
             'tiktoken is required but not importable. Install it with:\n'
@@ -59,7 +93,7 @@ def load(path=None):
             'The plugin never downloads at runtime.'
         )
     try:
-        ranks = load_tiktoken_bpe(p)
+        ranks = read_ranks(p)
     except Exception as exc:
         raise ValueError(
             f'vendored BPE at {p} could not be parsed ({exc.__class__.__name__}: {exc}).\n'
