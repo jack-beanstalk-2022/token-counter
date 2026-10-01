@@ -141,7 +141,8 @@ def test_nothing_private_is_sent():
     check('no working directory in the payload', SECRET_CWD not in blob and 'someone' not in blob)
     check('no raw session id in the payload', '11111111-aaaa' not in blob)
     check('only the documented keys are sent',
-          set(p) == {'schema', 'client', 'generated_at', 'days', 'sessions', 'windows', 'handle'}
+          set(p) == {'schema', 'client', 'generated_at', 'days', 'sessions', 'windows',
+                     'latency', 'handle'}
           and all(set(d) == {'date', 'responses', 'input', 'cached', 'output', 'reasoning',
                              'sessions'} for d in p['days'])
           and all(set(x) == {'id', 'day', 'start', 'end', 'active_s', 'responses', 'input',
@@ -153,6 +154,51 @@ def test_nothing_private_is_sent():
                                           'peak_pct', 'responses', 'input', 'cached', 'output'}
                                for x in w['windows']),
           json.dumps(w['windows'])[:400])
+
+
+def _timed_records(day, seconds):
+    """One response per entry of `seconds`: the prompt, the model's answer, then the usage
+    record that many seconds after the prompt."""
+    recs = [{'timestamp': f'{day}T10:00:00.000Z', 'type': 'session_meta',
+             'payload': {'session_id': 'L', 'id': 'L', 'cwd': SECRET_CWD}}]
+    t = datetime.datetime.fromisoformat(f'{day}T10:00:00+00:00')
+
+    def stamp(x):
+        return x.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    for i, s in enumerate(seconds):
+        recs.append({'timestamp': stamp(t), 'type': 'response_item',
+                     'payload': {'type': 'message', 'role': 'user',
+                                 'content': [{'type': 'input_text', 'text': SECRET_PROMPT}]}})
+        recs.append({'timestamp': stamp(t + datetime.timedelta(seconds=1)),
+                     'type': 'response_item',
+                     'payload': {'type': 'message', 'role': 'assistant',
+                                 'content': [{'type': 'output_text', 'text': 'ok'}]}})
+        t += datetime.timedelta(seconds=s)
+        recs.append({'timestamp': stamp(t), 'type': 'token_usage_record',
+                     'payload': {'response_id': f'L-r{i}', 'usage': {
+                         'input_tokens': 1000 + i, 'cached_input_tokens': 0,
+                         'output_tokens': 50, 'reasoning_output_tokens': 0,
+                         'total_tokens': 1050 + i}}})
+        t += datetime.timedelta(seconds=60)
+    return recs
+
+
+def test_latency():
+    _utc()
+    results, charged, _, p, _ = _build(_corpus_file(_timed_records('2026-09-10', [2, 4, 6, 8, 10])))
+    rows = p['latency']
+    check('each day with timed responses carries its median and p90 response time',
+          len(rows) == 1 and rows[0]['date'] == '2026-09-10' and rows[0]['responses'] == 5
+          and rows[0]['median_s'] == 6.0 and rows[0]['p90_s'] == 9.2, str(rows))
+    check('only the documented keys are sent per latency day',
+          all(set(x) == {'date', 'responses', 'median_s', 'p90_s'} for x in rows), str(rows))
+    model = analyze.analyze(results, charged, {}, scope={'label': 'test'})
+    rep = [(d['date'], d['n'], d['median_s'], d['p90_s']) for d in model['latency']['daily']]
+    check('latency days match the report model',
+          rep == [(x['date'], x['responses'], x['median_s'], x['p90_s']) for x in rows], str(rep))
+    *_, q, _ = _build(_corpus(CORPUS))
+    check('a corpus that cannot be timed sends an empty list', q['latency'] == [], str(q['latency']))
+    check('no prompt text rides along', SECRET_PROMPT not in json.dumps(p))
 
 
 def test_sessions_are_capped_per_month():
@@ -484,6 +530,7 @@ def main():
     test_sessions_are_capped_per_month()
     test_damaged_counts_are_clamped()
     test_limit_windows()
+    test_latency()
     test_transport()
     bad = sum(1 for _, ok, _ in RESULTS if not ok)
     print(f'\n{len(RESULTS) - bad}/{len(RESULTS)} passed')

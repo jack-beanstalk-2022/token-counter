@@ -60,7 +60,9 @@ started); for each month the top sessions by active time and by tokens, each as 
 hash of its id, start and end times, active time, token counts and the model name; and for
 each weekly rate-limit window, its start, the plan type and the percentages used that Codex
 logged in its rate-limit snapshots, and the tokens counted in it. tokenusage.dev uses the
-windows to estimate how many tokens each plan's weekly limit holds.
+windows to estimate how many tokens each plan's weekly limit holds. Also per day: how many
+responses could be timed and their median and p90 response time in seconds (nothing finer
+than a day, and no per-request times).
 
 Also sent, unless `--no-report`: the report page, rendered by token-report with `--public`.
 It carries the charts' data (daily input by model, the cumulative token curve and
