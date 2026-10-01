@@ -34,6 +34,13 @@ TOOL_OUTPUTS = ('function_call_output', 'custom_tool_call_output', 'local_shell_
 # spanning days and keeps the cached payload small.
 RL_BUCKET_S = 900
 
+# A file opens with a burst of records written back to back: its own header, and in a fork
+# child the parent history it replays, all stamped with the child's creation time a
+# millisecond or so apart (ARCHITECTURE.md section 2.5).  The burst ends at the first gap
+# longer than this.  A request the server refuses needs a round trip, so a refusal of the
+# file's own lands after the burst, and a replayed copy of the parent's lands inside it.
+OPENING_BURST_GAP_S = 0.05
+
 
 def _enc(vocab):
     from . import encoding
@@ -312,6 +319,10 @@ def _extract(path, full, vocab=None, num_threads=1):
         'responses': [],
         'hot_items': [], 'resend_cost': 0, 'unique_tokens': 0,
         'rate_limits': [],
+        # Every snapshot in which Codex logged a limit as reached, as epoch seconds, and
+        # where the file's opening burst of records ends (OPENING_BURST_GAP_S): a fork
+        # child's replayed copies of its parent's snapshots fall inside that burst.
+        'limit_events': [], 'opening_burst_end': None,
         # Timing (ARCHITECTURE.md 5.8): when each turn opened, indexed by turn, and every
         # tool call as [name, call time in epoch seconds, seconds from the call to its output].
         'turn_starts': [], 'tool_times': [],
@@ -350,6 +361,7 @@ def _extract(path, full, vocab=None, num_threads=1):
     req_ts, req_frozen = None, False
     prev_full = None                 # previous legacy record's full state, as the ledger compares
     call_at = {}                     # call_id -> (tool name, call timestamp), awaiting output
+    burst_open, burst_end = True, None
 
     # Deferred tokenization: collect texts across the file, encode once, then assemble.
     texts = []                       # every text destined for the tokenizer
@@ -429,6 +441,14 @@ def _extract(path, full, vocab=None, num_threads=1):
                 return
 
     for outer, payload, ts, _raw_len in records():
+        if burst_open:
+            rt = epoch(ts)
+            if rt is not None:
+                if burst_end is not None and rt - burst_end > OPENING_BURST_GAP_S:
+                    burst_open = False
+                else:
+                    burst_end = rt if burst_end is None else max(burst_end, rt)
+
         if outer == 'session_meta':
             if res['session_id'] is None:
                 res['session_id'] = payload.get('session_id')
@@ -524,7 +544,16 @@ def _extract(path, full, vocab=None, num_threads=1):
             # Before the usage checks below, not after: a `token_count` with `info: null`
             # still carries a rate-limit snapshot, and there are enough of them that
             # reading limits only on the usage path would lose window boundaries.
-            note_rate_limits(payload.get('rate_limits'), ts, rl_acc, ctr)
+            rl = payload.get('rate_limits')
+            note_rate_limits(rl, ts, rl_acc, ctr)
+            # One event a snapshot, whichever window it names: a refused request is one
+            # refusal even when both windows are full.
+            if isinstance(rl, dict) and rl.get('rate_limit_reached_type'):
+                rt = epoch(ts)
+                if rt is None:
+                    ctr['limit_event_no_time'] += 1
+                else:
+                    res['limit_events'].append(round(rt, 3))
             info = payload.get('info')
             if not info:
                 ctr['info_null'] += 1
@@ -612,6 +641,7 @@ def _extract(path, full, vocab=None, num_threads=1):
             continue
 
     res['rate_limits'] = finish_rate_limits(rl_acc)
+    res['opening_burst_end'] = None if burst_end is None else round(burst_end, 3)
     if call_at:
         # Interrupted, still running when the file was read, or its output never written.
         ctr['tool_no_output'] += len(call_at)

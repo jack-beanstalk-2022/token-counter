@@ -2361,6 +2361,137 @@ def test_account_and_limits_render():
           str(bare['account']))
 
 
+def _reached(t, info=None, five_hour=False):
+    """A `token_count` whose rate-limit snapshot says a limit was reached."""
+    rl = _rl(100.0, LAT_T0 + WEEK)
+    if five_hour:
+        rl['secondary'] = rl['primary']
+        rl['primary'] = {'used_percent': 100.0, 'window_minutes': 300, 'resets_at': LAT_T0 + 3600}
+    rl['rate_limit_reached_type'] = 'primary'
+    return _at(t, 'event_msg', {'type': 'token_count', 'info': info, 'rate_limits': rl})
+
+
+def _limit_corpus():
+    """A parent refused on two days, a fork child that replays all of it at its creation and
+    is then refused once on its own, and an unrelated session refused in its opening burst.
+
+    Days, in UTC: the parent's two refusals on day 0 and one on day 1 (that one beside the
+    usage of a response, with both windows full), the child's own on day 2, the other
+    session's on day 3.  One of the parent's is stamped with no readable time.
+    """
+    d = tempfile.mkdtemp()
+    t = LAT_T0
+    work = [_user(t + 1), _reached(t + 2), _user(t + 100), _reached(t + 101),
+            _tc(t + 200, 40.0, t + WEEK, 1000, 1000),               # a snapshot, not reached
+            _reached(t + 86400, info=_tc(0, 0, 0, 2000, 1000)['payload']['info'], five_hour=True),
+            dict(_reached(t + 86500), timestamp='not a time')]
+    _write(d, 'rollout-1-parent.jsonl',
+           [_at(t, 'session_meta', {'session_id': 'F', 'id': 'P'}),
+            _at(t, 'turn_context', {'model': 'm1', 'effort': 'low'})] + work)
+    tc = t + 2 * 86400 + 500                            # the child's creation time
+    replay = [dict(r, timestamp=_at(tc + k / 1000, 'x', {})['timestamp'])
+              for k, r in enumerate(work)]
+    _write(d, 'rollout-2-child.jsonl',
+           [_at(tc, 'session_meta', {'session_id': 'F', 'id': 'C', 'parent_thread_id': 'P'})]
+           + replay
+           + [_at(tc + 3, 'turn_context', {'model': 'm1', 'effort': 'low'}),
+              _user(tc + 5), _reached(tc + 5.4)])
+    ts = t + 3 * 86400
+    _write(d, 'rollout-3-solo.jsonl',
+           [_at(ts, 'session_meta', {'session_id': 'S', 'id': 'S'}), _reached(ts + .001)])
+    return d
+
+
+def test_limit_events():
+    """A rate-limit event is a snapshot in which Codex logged a limit as reached: one a
+    snapshot, counted per local day, with a fork child's replayed copies left out."""
+    d = _limit_corpus()
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    by = {os.path.basename(p).split('-')[2].split('.')[0]: r for p, r in data.items()}
+    par = by['parent']
+    check('the worker keeps one event a reached snapshot, whichever windows it names',
+          par['limit_events'] == [LAT_T0 + 2, LAT_T0 + 101, LAT_T0 + 86400]
+          and par['counters'].get('limit_event_no_time') == 1, str(par['limit_events']))
+    check('and the metrics-only pass keeps the same events',
+          worker.metrics_only([p for p in data if 'parent' in p][0])['limit_events']
+          == par['limit_events'], '')
+    kid = by['child']
+    check('a fork child\'s opening burst ends where its own work begins',
+          abs(kid['opening_burst_end'] - (LAT_T0 + 2 * 86400 + 500 + .006)) < 1e-6
+          and len(kid['limit_events']) == 5, str(kid['opening_burst_end']))
+    ev, q = analyze.limit_events(data, tz=datetime.timezone.utc)
+    day = lambda k: (datetime.datetime.fromtimestamp(LAT_T0, datetime.timezone.utc).date()
+                     + datetime.timedelta(days=k)).isoformat()
+    check('events are counted per day; the child\'s replayed copies are not, its own refusal is',
+          [(x['date'], x['n']) for x in ev['daily']]
+          == [(day(0), 2), (day(1), 1), (day(2), 1), (day(3), 1)]
+          and ev['total'] == 5 and q['limit_events'] == 5 and q['limit_events_replayed'] == 4,
+          str(ev) + str(q))
+    check('each day carries the local-day span the other charts use',
+          all((x['start'], x['end']) == analyze._day_span(x['date'], datetime.timezone.utc)
+              for x in ev['daily']), str(ev['daily']))
+    orphan = {p: dict(r, parent_thread_id=None) for p, r in data.items()}
+    check('without a declared parent nothing is taken for a replay',
+          analyze.limit_events(orphan)[0]['total'] == 9, '')
+    charged, counters = ledger.build(data)
+    model = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    check('the model carries the events, and the quality counters say what was left out',
+          model['limit_events']['total'] == 5 and model['quality']['limit_events_replayed'] == 4
+          and model['quality']['limit_event_no_time'] == 1, str(model['quality']))
+    none = analyze.limit_events({p: dict(r, limit_events=[]) for p, r in data.items()})
+    check('no events is an empty list, not a missing key', none[0] == {'total': 0, 'daily': []},
+          str(none))
+
+
+def test_limit_events_chart():
+    """The events are bars on the response-time chart, on an axis of their own; a report with
+    events and nothing timed still draws the chart, and one with neither says why."""
+    d = _limit_corpus()
+    _write(d, 'rollout-4-lat.jsonl', _timed_session(LAT_T0))
+    data = {p: worker.process(p) for p in rollout.discover(d)}
+    charged, counters = ledger.build(data)
+    model = analyze.analyze(data, charged, counters, scope={'label': 'test'})
+    html = render.render(model)
+    panel = html.split('id="latchart"')[1].split('id="catpie"')[0]
+    payload = lambda h: json.loads(re.search(r'window.__TC__ = (\{.*?\});</script>', h).group(1)
+                                   .replace('\\u003c', '<').replace('\\u003e', '>')
+                                   .replace('\\u0026', '&'))
+    evd = model['limit_events']['daily']
+    check('the payload carries each event day as [start, end, events]',
+          payload(html)['latency']['events'] == [[x['start'], x['end'], x['n']] for x in evd]
+          and len(evd) == 4, str(payload(html)['latency']))
+    check('the legend names the bars and their axis beside the two lines',
+          'median response time</span>' in panel and '>p90</span>' in panel
+          and 'rate-limit events (right axis)</span>' in panel
+          and 'no rate-limit events' not in panel, panel[:400])
+    dm = render._domain(model)
+    check('one domain covers the event days too',
+          dm[0] <= evd[0]['start'] and dm[1] >= evd[-1]['end'], str(dm))
+    check('the public page carries the counts too',
+          payload(render.render(model, public=True))['latency']['events']
+          == payload(html)['latency']['events'], '')
+    quiet = dict(model, limit_events={'total': 0, 'daily': []})
+    qp = render.render(quiet).split('id="latchart"')[1].split('id="catpie"')[0]
+    check('with no events the legend says none were logged, and no bar is sent',
+          'no rate-limit events logged</span>' in qp and '"events":[]' in render.render(quiet),
+          qp[:400])
+    blocked = render.render(dict(model, latency={'available': False, 'reason': 'none here'}))
+    bp = blocked.split('id="latchart"')[1].split('id="catpie"')[0]
+    check('events and nothing timed: the page draws the bars, and the legend says why no lines',
+          '<div class="chart" id="latchart"></div>' in blocked
+          and '<span>Response time not available &mdash; none here</span>' in bp
+          and 'rate-limit events (right axis)' in bp and '>p90<' not in bp
+          and payload(blocked)['latency']['events'], bp[:400])
+    neither = render.render(dict(quiet, latency={'available': False, 'reason': 'none here'}))
+    check('neither: the chart keeps its place and says why, as before',
+          'Response time not available &mdash; none here.</p>' in neither, '')
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc, _m, _h = _run_main(['--sessions-root', d, '--no-account'])
+    check('the terminal summary counts the events and the days they fell on',
+          rc == 0 and 'rate-limit events 5 on 4 days' in buf.getvalue(), buf.getvalue())
+
+
 # ------------------------------------------------------------------ one shared time axis
 
 def _at(t, kind, payload):
@@ -2419,6 +2550,14 @@ def page_fixture():
         dict(d, n=(render.HOUR_MIN - 2 if i == 0 else render.HOUR_MIN + 7),
              median_s=20.0 + i, p90_s=45.0 + 2 * i)
         for i, d in enumerate(model['latency']['daily'])]
+    # Rate-limit events on the thin day, on a drawn day, and on the day after it, inside the
+    # corpus's gap: a day the limit blocked outright, with bars and no timed response.
+    lat_days = model['latency']['daily']
+    gap = (datetime.date.fromisoformat(lat_days[2]['date'])
+           + datetime.timedelta(days=1)).isoformat()
+    model['limit_events'] = {'total': 11, 'daily': [
+        {'date': d, 'n': n, 'start': analyze._day_span(d)[0], 'end': analyze._day_span(d)[1]}
+        for d, n in ((lat_days[0]['date'], 3), (lat_days[2]['date'], 1), (gap, 7))]}
     return render.render(model)
 
 
@@ -2551,6 +2690,8 @@ def main():
     test_rate_limit_windows()
     test_cumulative_curve_is_monotonic()
     test_account_and_limits_render()
+    test_limit_events()
+    test_limit_events_chart()
     test_shared_time_axis()
     test_render()
     bad = sum(1 for _, ok, _ in RESULTS if not ok)

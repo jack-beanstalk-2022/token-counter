@@ -434,6 +434,40 @@ def rate_limit_windows(files, responses, now=None, newest=MAX_CHART_WINDOWS):
     }
 
 
+def limit_events(files, tz=None):
+    """``(events, data-quality counters)``: the snapshots in which Codex logged a rate limit
+    as reached, counted per local day.
+
+    Reported, like the window percentages: an event is a snapshot whose
+    ``rate_limit_reached_type`` is set, one per snapshot whichever window it names.  A fork
+    child replays its parent's snapshots stamped with its own creation time (section 2.5),
+    so in a file that declares a parent, an event inside the file's opening burst of
+    records is the parent's, already counted in the parent's file, and is left out and
+    counted as ``limit_events_replayed``.  `tz` pins the zone the days are read in, for
+    tests; ``None`` is the machine's, as everywhere else in the report.
+    """
+    q = collections.Counter()
+    days = collections.Counter()
+    for _path, fr in sorted(files.items()):
+        burst = fr.get('opening_burst_end') if fr.get('parent_thread_id') else None
+        for t in (fr.get('limit_events') or []):
+            if burst is not None and t <= burst:
+                q['limit_events_replayed'] += 1
+                continue
+            try:
+                dt = (datetime.datetime.fromtimestamp(t, tz) if tz is not None
+                      else datetime.datetime.fromtimestamp(t))
+            except (OverflowError, OSError, ValueError, TypeError):
+                q['limit_event_no_time'] += 1
+                continue
+            days[dt.date().isoformat()] += 1
+    q['limit_events'] = sum(days.values())
+    return ({'total': q['limit_events'],
+             'daily': [{'date': d, 'n': n, 'start': _day_span(d, tz)[0],
+                        'end': _day_span(d, tz)[1]}
+                       for d, n in sorted(days.items())]}, q)
+
+
 def _in_time_order(responses):
     """Charged responses oldest first, dropping those whose timestamp could not be read.
 
@@ -697,6 +731,10 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
     # the shared time axis without re-deriving them (and their DST handling) in the page.
     for d in (lat.get('daily') or []):
         d['start'], d['end'] = _day_span(d['date'])
+    # Drawn as bars on the response-time chart, and kept apart from `latency`: a day the
+    # limit blocked outright has events and no timed response.
+    lim, lim_q = limit_events(files)
+    quality.update(lim_q)
 
     inp, cch = totals['input'], totals['cached']
     uniq = totals['unique_tokens'] or 0
@@ -705,6 +743,7 @@ def analyze(files, charged, counters, scope=None, focus=None, extra_quality=None
         'scope': scope or {},
         'account': account or {'available': False, 'reason': 'not requested'},
         'rate_limits': rate_limit_windows(files, resp_ts),
+        'limit_events': lim,
         'totals': {
             'files': len(files),
             'sessions': len(sessions),
