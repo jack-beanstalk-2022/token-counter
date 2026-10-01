@@ -104,9 +104,9 @@ over-read:
 - **Response time is measured; the queue is not.** A response runs from the moment its
   prompt was complete (the user's message or the last tool output) to the moment Codex
   recorded it, so it covers network, queueing, reading the prompt and writing the answer
-  together. "Time above the fastest pace" is an estimate fitted to those times, labelled as
-  one on the chart; so are the per-model overhead and output rate in `--json`
-  (`latency.groups[].fit`). Never call the time above the pace a queue
+  together. "Time above the fastest pace" is an estimate fitted to those times, worded as
+  one on the terminal line; so are the per-model overhead and output rate in `--json`
+  (`latency.groups[].fit`). The page shows none of it. Never call the time above the pace a queue
   time: retries, slow generation and ordinary variation land there too. Tool time includes
   any wait for the user's approval.
 
@@ -138,9 +138,8 @@ Quoting the reported percentage and the reset times is fine; those are recorded 
 Five headline numbers — input (counted with tiktoken), output, cache hit, sessions, and the
 weekly limit as the server's own reported percentage — plus the longest session, and three
 charts: a cumulative token curve per weekly limit window with the reported percentage
-overlaid; daily input stacked by the model that was charged for it; response time by day
-(the median response, capped by the estimated median time above the fastest pace); and
-content composition by category. The median response time is also a tile. The per-model
+overlaid; daily input stacked by the model that was charged for it; response time by day,
+as two lines, the median and the p90; and content composition by category. The median response time is also a tile. The per-model
 response times and pace estimates, the hour of day, turn time and time per tool are in
 `--json` (`latency`), not on the page.
 

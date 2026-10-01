@@ -65,8 +65,8 @@ windows to estimate how many tokens each plan's weekly limit holds.
 Also sent, unless `--no-report`: the report page, rendered by token-report with `--public`.
 It carries the charts' data (daily input by model, the cumulative token curve and
 reported percentage of each weekly limit window over time, and content composition by
-category in hourly buckets, and the median response time and estimated median time above
-the fastest pace for each day) and the headline numbers. It leaves out the two machine
+category in hourly buckets, and the median and p90 response time for each day) and the
+headline numbers. It leaves out the two machine
 strings the local page shows, the top session's id and its directory name, and never reads
 `auth.json`. The server serves it in a sandbox: its scripts run, and it can reach nothing.
 

@@ -83,14 +83,14 @@ const daily = barChart('dailychart');
 if (!daily || !daily.bars.length) throw new Error('no daily bars in the page');
 const dailyHtml = daily.src;
 const { bars, clip, base, ax } = daily;
-const lat = barChart('latchart');
-if (!lat || !lat.bars.length) throw new Error('no response-time bars in the page');
+const latHost = node();                   // drawn by the page itself, like the limit chart
+if (!html.includes('id="latchart"')) throw new Error('no response-time chart in the page');
 
 const rlHost = node();
 const dailyHost = daily.host;
 const pieHost = node();
 const modelHost = node();
-const els = { rlchart: rlHost, dailychart: dailyHost, latchart: lat.host, catpie: pieHost,
+const els = { rlchart: rlHost, dailychart: dailyHost, latchart: latHost, catpie: pieHost,
               modelpie: modelHost };
 
 const raf = [];
@@ -164,24 +164,38 @@ check('the plot area is the same in both charts',
       && +base.getAttribute('x1') === L && +base.getAttribute('x2') === W - RM,
       `clip=${clip.getAttribute('x')}/${clip.getAttribute('width')} base=${base.getAttribute('x1')}..${base.getAttribute('x2')}`);
 
-// 2a. the response-time chart is the third chart on the same axis
-const sameDays = () => {
-  const d = new Map(bars.map(b => [b.getAttribute('data-a'), b.getAttribute('transform')]));
-  const both = lat.bars.filter(b => d.has(b.getAttribute('data-a')));
-  return { n: both.length, off: both.filter(b => b.getAttribute('transform') !== d.get(b.getAttribute('data-a'))).length };
-};
-let sd = sameDays();
-check('the response-time chart puts each day where the daily chart does',
-      sd.n >= 1 && sd.off === 0, JSON.stringify(sd));
-check('the response-time chart draws the same ticks, and no vertical guides',
-      JSON.stringify(ticksOf(lat.ax.innerHTML)) === JSON.stringify(t2) && !/<line/.test(lat.ax.innerHTML),
-      JSON.stringify([ticksOf(lat.ax.innerHTML), t2]));
-const lMarks = run('SCN').get(lat.host);
-check('the response-time chart records its marks by day, inside its own plot',
-      !!lMarks && lMarks.list.length > 0
-      && lMarks.list.every(m => m.t === 'rect' && m.x + m.w >= L && m.x <= W - RM
-                              && lat.bars.some(b => +b.getAttribute('data-a') === m.day))
-      && JSON.stringify(lMarks.plot) === JSON.stringify([L, 18, W - L - RM, lat.h - 18 - 34]),
+// 2a. the response-time chart is the third chart on the same axis: two lines, a point a day
+const LD = run('LDAYS'), LMIN = run('LAT_MIN');
+const drawable = LD.filter(r => r[2] >= LMIN && r[3] != null);
+const lineMarks = () => (run('SCN').get(latHost) || { list: [] }).list;
+/** Every point of every line sits at the middle of a drawable day, at the page's own X. */
+const onDays = () => lineMarks().every(m => m.pts.every(p =>
+  drawable.some(r => Math.abs(p[0] - run(`X(${(r[0] + r[1]) / 2})`)) < 0.01)));
+check('the response-time chart is two lines: the median solid, the p90 dashed',
+      lineMarks().some(m => m.t === 'line' && !m.dash && m.c === '--uncached')
+      && lineMarks().some(m => m.t === 'line' && m.dash && m.c === '--dim')
+      && lineMarks().every(m => m.t === 'line'), JSON.stringify(lineMarks().map(m => [m.c, !!m.dash])));
+const d0 = drawable[0], bar0 = bars.find(b => +b.getAttribute('data-a') === d0[0]);
+check('a day\'s point sits over that day\'s bar in the daily chart',
+      onDays() && !!bar0
+      && Math.abs(+bar0.getAttribute('transform').match(/translate\(([-\d.]+),/)[1] - run(`X(${d0[0]})`)) < 0.01,
+      JSON.stringify(lineMarks()[0]));
+check('the response-time chart draws the same ticks as the limit chart',
+      JSON.stringify(ticksOf(latHost.innerHTML)) === JSON.stringify(t1), JSON.stringify(ticksOf(latHost.innerHTML)));
+const thin = LD.find(r => r[2] < LMIN);
+check('a thin day is not a point, keeps a hover target that says so, and breaks the line',
+      !!thin && !lineMarks().some(m => m.pts.some(p => Math.abs(p[0] - run(`X(${(thin[0] + thin[1]) / 2})`)) < 0.01))
+      && latHost.innerHTML.includes('too few to show'),
+      JSON.stringify(thin));
+const gapped = drawable.some((r, i) => i && r[0] - drawable[i - 1][1] > 3600);
+const spans = lineMarks().flatMap(m => m.pts.slice(1).map((p, i) => run(`Tat(${p[0]}) - Tat(${m.pts[i][0]})`)));
+check('a gap in the days breaks the line rather than bridging it',
+      gapped && spans.length >= 1 && spans.every(dt => dt <= 1.5 * 86400)
+      && (latHost.innerHTML.match(/<circle /g) || []).length === 2 * drawable.length,
+      JSON.stringify(spans));
+const lMarks = run('SCN').get(latHost);
+check('the response-time chart records its marks inside its own plot',
+      !!lMarks && JSON.stringify(lMarks.plot) === JSON.stringify([L, 18, W - L - RM, 190 - 18 - 34]),
       JSON.stringify(lMarks && lMarks.plot));
 
 const fullPie = pieTotal();
@@ -264,6 +278,18 @@ const verts = v => { const o = []; for (let i = 0; i < v.length; i += N3.VS) o.p
         blocks.every(q => q[0] >= -1e-9 && q[0] <= N3.PW + 1e-9 && q[1] >= 0), '');
 }
 {
+  // The scene's response-time exhibit is built from the page's own line marks.
+  const lm = run('SCN').get(latHost);
+  const v = run('VIEW');
+  const m = N3.lines(lm, { tk: [], view: v, pw: N3.PW, ylab: f => String(f),
+                           days: LD.map(r => [r[0], r[1]]), legend: [] }, cx3);
+  const inView = LD.filter(r => r[1] > v[0] && r[0] < v[1]).length;
+  check('the 3D scene builds the response-time lines, with one hover target a day',
+        m.solid.length > 0 && m.hits.length === inView
+        && m.hits.every(h => h.box[0] >= -1e-9 && h.box[3] <= N3.PW + 1e-9 && LD.some(r => r[0] === h.day)),
+        `${m.hits.length} hits for ${inView} days`);
+}
+{
   const m = N3.medal(pMarks, { legend: { rows: [] }, hot: -1, title: 't' }, cx3);
   const sl = pMarks.list[0].slices.filter(s => s[0] > 1e-6);
   const turn = m.arcs.reduce((a, [, lo, hi]) => a + hi - lo, 0);
@@ -333,10 +359,9 @@ const t1z = ticksOf(rlHost.innerHTML), t2z = ticksOf(ax.innerHTML);
 check('the two charts still share ticks when zoomed',
       t1z.length >= 1 && JSON.stringify(t1z) === JSON.stringify(t2z),
       JSON.stringify([t1z, t2z]));
-sd = sameDays();
 check('zooming moves the response-time chart with the other two',
-      sd.n >= 1 && sd.off === 0 && JSON.stringify(ticksOf(lat.ax.innerHTML)) === JSON.stringify(t2z),
-      JSON.stringify(sd));
+      onDays() && JSON.stringify(ticksOf(latHost.innerHTML)) === JSON.stringify(t1z),
+      JSON.stringify(lineMarks()[0] || null));
 
 // 4. drag moves the range by exactly the distance dragged
 const v0 = run('VIEW').slice();
@@ -384,7 +409,7 @@ check('the charts re-measure for a narrow screen',
 const tm1 = ticksOf(rlHost.innerHTML), tm2 = ticksOf(ax.innerHTML);
 check('a phone still gets readable ticks, the same ones in every time chart',
       tm1.length >= 2 && JSON.stringify(tm1) === JSON.stringify(tm2)
-      && JSON.stringify(ticksOf(lat.ax.innerHTML)) === JSON.stringify(tm2), JSON.stringify([tm1, tm2]));
+      && JSON.stringify(ticksOf(latHost.innerHTML)) === JSON.stringify(tm2), JSON.stringify([tm1, tm2]));
 check('nothing is drawn outside the narrow plot area',
       tm1.every(t => +t.split('=')[0] >= run('L') - 0.5
                      && +t.split('=')[0] <= run('W') - run('RM') + 0.5), JSON.stringify(tm1));
